@@ -1,0 +1,93 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #0f141d;
+    color: #e2e8f0;
+    font-family: var(--font-sans);
+  }
+}
+
+.studio-viewport-bg {
+  background: radial-gradient(ellipse at 52% 38%, #1c2432 0%, #151c28 52%, #0f141d 100%);
+}
+
+/* Custom slim industrial scrollbars */
+.cad-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.cad-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.cad-scroll::-webkit-scrollbar-thumb {
+  background: #273449;
+  border-radius: 3px;
+}
+
+.cad-scroll::-webkit-scrollbar-thumb:hover {
+  background: #3b4d6b;
+}
+
+/* Precision CAD range slider */
+input[type="range"].cad-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  background: #263244;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type="range"].cad-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #38bdf8;
+  border: 2px solid #0f172a;
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.5);
+  transition: transform 0.12s ease, background-color 0.12s ease;
+}
+
+input[type="range"].cad-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  background: #7dd3fc;
+}
+
+input[type="range"].cad-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #38bdf8;
+  border: 2px solid #0f172a;
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.5);
+  transition: transform 0.12s ease, background-color 0.12s ease;
+}
+
+/* Hide number input spinners for clean tabular CAD fields */
+input[type="number"].no-spinner::-webkit-inner-spin-button,
+input[type="number"].no-spinner::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"].no-spinner {
+  -moz-appearance: textfield;
+}
