@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { Check, ClipboardPaste, Copy, FileCode2, Play } from 'lucide-react';
 import {
-  evaluateSplitRecommendation,
+  evaluateSplitForConfig,
   normalizeThicknessForMaterial,
   parseStraightDuctLsx,
 } from '../domain/ductRules';
+import { createDefaultEndConnection } from '../domain/endConnectionRules';
 import type { DuctConfig, SheetMaterialType, SheetThickness } from '../types/duct';
 
 interface LsxTabProps {
@@ -13,10 +14,11 @@ interface LsxTabProps {
 }
 
 const SAMPLE_LSX_LINES = [
-  'Ống gió KT: 500x320, L1110, tôn 0.75, bích TDC',
-  'Ống gió Inox KT: 600x400, L1220, dày 0.8, bích TDC',
-  'Ống gió KT: 1200x600, L110, tôn 1.2, 1 đầu bích TDC, 1 đầu để thẳng',
-  'Ống gió KT 900x700, L1540, tôn 0.95, 2 đầu bích TDC',
+  'Ống gió KT: 500x320, L1100, tôn 0.75, 2 đầu bích TDC/TDF',
+  'Ống gió Inox KT: 700x400, L1200, dày 0.8, 2 đầu nẹp C',
+  'Ống gió KT: 600x400, L1000, tôn 0.75, 1 đầu bịt kín, 1 đầu bích TDC',
+  'Ống gió KT: 800x500, L1000, tôn 0.95, 2 đầu bích V80x30',
+  'Ống gió KT: 600x350, L950, tôn 0.75, 1 đầu bích TDC, 1 đầu để thẳng +40',
 ];
 
 export function LsxTab({ config, onApplyConfig }: LsxTabProps) {
@@ -28,8 +30,16 @@ export function LsxTab({ config, onApplyConfig }: LsxTabProps) {
 
   const handleParseLsx = () => {
     const parsed = parseStraightDuctLsx(lsxText, config.sheetMaterial);
-    if (!parsed.W && !parsed.H && !parsed.L && !parsed.thickness && !parsed.sheetMaterial) {
-      setParseFeedback(['Chưa nhận diện được kích thước (ví dụ: KT: 500x320, L1110, tôn 0.75).']);
+    if (
+      !parsed.W &&
+      !parsed.H &&
+      !parsed.L &&
+      !parsed.thickness &&
+      !parsed.sheetMaterial &&
+      !parsed.c1 &&
+      !parsed.c2
+    ) {
+      setParseFeedback(['Chưa nhận diện được kích thước (ví dụ: KT: 500x320, L1100, tôn 0.75).']);
       return;
     }
 
@@ -37,10 +47,12 @@ export function LsxTab({ config, onApplyConfig }: LsxTabProps) {
     const nextW = parsed.W ?? config.W;
     const nextH = parsed.H ?? config.H;
     const nextL = parsed.L ?? config.L;
+    const nextC1 = parsed.c1 ?? config.c1;
+    const nextC2 = parsed.c2 ?? config.c2;
     const nextT: SheetThickness = parsed.thickness
       ? parsed.thickness
       : normalizeThicknessForMaterial(config.thickness, nextMat);
-    const rec = evaluateSplitRecommendation(nextW, nextH, nextL, nextMat);
+    const rec = evaluateSplitForConfig(nextW, nextH, nextL, nextMat, nextC1, nextC2);
 
     onApplyConfig({
       W: nextW,
@@ -48,6 +60,8 @@ export function LsxTab({ config, onApplyConfig }: LsxTabProps) {
       L: nextL,
       sheetMaterial: nextMat,
       thickness: nextT,
+      c1: nextC1,
+      c2: nextC2,
       autoSplit: true,
       splitMode: rec.recommended,
       seamOverrides: {},
@@ -69,6 +83,9 @@ export function LsxTab({ config, onApplyConfig }: LsxTabProps) {
         weldOverlapWidth: config.weldOverlapWidth,
         swapSeamRoles: config.swapSeamRoles,
         stiffenerRibs: config.stiffenerRibs,
+        showFaceLabels: config.showFaceLabels,
+        c1: config.c1,
+        c2: config.c2,
       },
       null,
       2
@@ -109,6 +126,13 @@ export function LsxTab({ config, onApplyConfig }: LsxTabProps) {
       }
       if (typeof obj.swapSeamRoles === 'boolean') patch.swapSeamRoles = obj.swapSeamRoles;
       if (typeof obj.stiffenerRibs === 'boolean') patch.stiffenerRibs = obj.stiffenerRibs;
+      if (typeof obj.showFaceLabels === 'boolean') patch.showFaceLabels = obj.showFaceLabels;
+      if (obj.c1 && typeof obj.c1 === 'object' && typeof obj.c1.type === 'string') {
+        patch.c1 = createDefaultEndConnection(obj.c1.type, obj.c1);
+      }
+      if (obj.c2 && typeof obj.c2 === 'object' && typeof obj.c2.type === 'string') {
+        patch.c2 = createDefaultEndConnection(obj.c2.type, obj.c2);
+      }
 
       onApplyConfig(patch);
       setJsonStatus('Đã nạp thông số JSON vào mô hình 3D.');
@@ -132,7 +156,7 @@ export function LsxTab({ config, onApplyConfig }: LsxTabProps) {
           rows={4}
           value={lsxText}
           onChange={(e) => setLsxText(e.target.value)}
-          placeholder="Ví dụ: Ống gió Inox KT: 600x400, L1220, dày 0.8..."
+          placeholder="Ví dụ: Ống gió Inox KT: 700x400, L1200, dày 0.8, 2 đầu nẹp C..."
           className="w-full resize-none rounded-lg border border-[#243043] bg-[#0d121a] p-2.5 font-mono text-xs leading-relaxed text-slate-200 placeholder-slate-500 outline-none focus:border-sky-500/60"
         />
 
@@ -194,7 +218,7 @@ export function LsxTab({ config, onApplyConfig }: LsxTabProps) {
           rows={4}
           value={jsonInput}
           onChange={(e) => setJsonInput(e.target.value)}
-          placeholder='{"W": 800, "H": 500, "L": 1220, "sheetMaterial": "inox", "thickness": 0.8}'
+          placeholder='{"W": 800, "H": 500, "L": 1100, "sheetMaterial": "inox", "thickness": 0.8}'
           className="w-full resize-none rounded-lg border border-[#243043] bg-[#0d121a] p-2.5 font-mono text-[11px] text-slate-200 placeholder-slate-600 outline-none focus:border-sky-500/60"
         />
 

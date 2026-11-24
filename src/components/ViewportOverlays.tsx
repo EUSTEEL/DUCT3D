@@ -1,10 +1,13 @@
-import { Box, Crosshair, Eye, PanelLeftOpen, RotateCcw, Square } from 'lucide-react';
+import { Box, Crosshair, Eye, PanelLeftOpen, RotateCcw, Square, X } from 'lucide-react';
 import { SHEET_MATERIAL_LABELS, SPLIT_MODE_LABELS } from '../domain/ductRules';
+import { END_CONNECTION_SHORT_LABELS } from '../domain/endConnectionRules';
 import type { CameraPreset, DuctConfig } from '../types/duct';
 
 interface ViewportOverlaysProps {
   config: DuctConfig;
   sidebarOpen: boolean;
+  selectedPartCode: string | null;
+  onClearSelection: () => void;
   onExpandSidebar: () => void;
   onCameraPreset: (preset: CameraPreset) => void;
 }
@@ -12,27 +15,53 @@ interface ViewportOverlaysProps {
 export function ViewportOverlays({
   config,
   sidebarOpen,
+  selectedPartCode,
+  onClearSelection,
   onExpandSidebar,
   onCameraPreset,
 }: ViewportOverlaysProps) {
   const isTech = config.materialMode === 'technical';
   const matLabel = SHEET_MATERIAL_LABELS[config.sheetMaterial];
+  const c1Label = END_CONNECTION_SHORT_LABELS[config.c1.type];
+  const c2Label = END_CONNECTION_SHORT_LABELS[config.c2.type];
+  const endsSummary =
+    c1Label === c2Label ? `2× ${c1Label}` : `C1: ${c1Label} • C2: ${c2Label}`;
 
   return (
     <>
-      {/* Top-Left Floating Expand Button when Left Sidebar is Hidden */}
-      {!sidebarOpen && (
-        <button
-          id="btn-expand-sidebar"
-          type="button"
-          onClick={onExpandSidebar}
-          className="absolute top-3 left-3 z-20 inline-flex items-center gap-1.5 rounded-lg border border-[#2a3950] bg-[#0e141e]/90 px-3 py-1.5 text-xs font-medium text-sky-200 shadow-lg backdrop-blur-md transition-colors hover:border-sky-500/60 hover:bg-[#162030] hover:text-white"
-          title="Mở lại bảng điều khiển bên trái"
-        >
-          <PanelLeftOpen className="h-4 w-4 text-sky-400" />
-          <span>Bảng điều khiển</span>
-        </button>
-      )}
+      {/* Top-Left Floating Expand Button & Selected Part Pill */}
+      <div className="absolute top-3 left-3 z-20 flex items-center gap-2">
+        {!sidebarOpen && (
+          <button
+            id="btn-expand-sidebar"
+            type="button"
+            onClick={onExpandSidebar}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#2a3950] bg-[#0e141e]/90 px-3 py-1.5 text-xs font-medium text-sky-200 shadow-lg backdrop-blur-md transition-colors hover:border-sky-500/60 hover:bg-[#162030] hover:text-white"
+            title="Mở lại bảng điều khiển bên trái"
+          >
+            <PanelLeftOpen className="h-4 w-4 text-sky-400" />
+            <span>Bảng điều khiển</span>
+          </button>
+        )}
+
+        {selectedPartCode && (
+          <div
+            id="pill-selected-part"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/55 bg-sky-500/18 px-2.5 py-1 text-xs font-medium text-sky-100 shadow-lg backdrop-blur-md"
+          >
+            <span>Đang chọn mảnh:</span>
+            <strong className="font-mono font-bold text-white">{selectedPartCode}</strong>
+            <button
+              type="button"
+              onClick={onClearSelection}
+              aria-label="Bỏ chọn mảnh"
+              className="ml-0.5 rounded p-0.5 text-sky-200 hover:bg-sky-400/25 hover:text-white"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Bottom-Left: Compact Status Pill / Technical Color Legend */}
       <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex flex-col gap-1.5">
@@ -47,6 +76,10 @@ export function ViewportOverlays({
               <span>Mí đơn (+7, vát 45°)</span>
             </span>
             <span className="inline-flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-xs bg-[#eab308]" />
+              <span>Bích / Đầu nối</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5">
               <span className="h-2.5 w-2.5 rounded-xs bg-[#22c55e]" />
               <span>Đường chấn 90°</span>
             </span>
@@ -57,7 +90,7 @@ export function ViewportOverlays({
           </div>
         )}
 
-        <div className="inline-flex w-fit items-center gap-2 rounded-lg border border-[#222e40] bg-[#0e141e]/80 px-2.5 py-1 font-mono text-[11px] text-slate-300 backdrop-blur-md">
+        <div className="inline-flex w-fit flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg border border-[#222e40] bg-[#0e141e]/80 px-2.5 py-1 font-mono text-[11px] text-slate-300 backdrop-blur-md">
           <span className="font-semibold text-sky-300">
             {config.W} × {config.H} × L{config.L} mm
           </span>
@@ -65,6 +98,8 @@ export function ViewportOverlays({
           <span className="font-sans text-slate-200">
             {matLabel} <span className="font-mono">{config.thickness}</span> mm
           </span>
+          <span className="text-slate-600">|</span>
+          <span className="font-sans text-amber-200/90">{endsSummary}</span>
           <span className="text-slate-600">|</span>
           <span className="font-sans text-slate-300">{SPLIT_MODE_LABELS[config.splitMode]}</span>
           <span className="text-slate-600">|</span>

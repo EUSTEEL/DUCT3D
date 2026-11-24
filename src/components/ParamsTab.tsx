@@ -6,33 +6,46 @@ import {
   ChevronRight,
   Flame,
   Info,
+  MousePointerClick,
   RotateCcw,
   Sparkles,
+  X,
 } from 'lucide-react';
 import {
+  calculateBlankAnalysis,
   computeRibLayout,
   DUCT_PRESETS,
-  evaluateSplitRecommendation,
+  evaluateSplitForConfig,
   getAllowedThicknesses,
   getSheetStandardWidth,
   resolveActiveSeams,
   SHEET_MATERIAL_LABELS,
   WALL_LABELS,
 } from '../domain/ductRules';
+import { BE_CHAN_MODE_LABELS, getEndCapEdgeSeam } from '../domain/endConnectionRules';
 import type {
+  BeChanEdgeMode,
   CornerId,
   DuctConfig,
+  EndConnectionConfig,
   SeamType,
   SheetMaterialType,
   SheetThickness,
   SplitMode,
+  WallId,
 } from '../types/duct';
+import { EndConnectionPanel } from './EndConnectionPanel';
+import { NumericDraftInput } from './NumericDraftInput';
 
 interface ParamsTabProps {
   config: DuctConfig;
+  selectedPartCode: string | null;
+  onSelectPart: (partCode: string | null) => void;
   onChange: (patch: Partial<DuctConfig>) => void;
   onDimensionChange: (dim: 'W' | 'H' | 'L', value: number) => void;
   onSheetMaterialChange: (material: SheetMaterialType) => void;
+  onUpdateEndConnection: (end: 'c1' | 'c2', patch: Partial<EndConnectionConfig>) => void;
+  onCopyC1ToC2: () => void;
   onSelectSplitMode: (mode: SplitMode) => void;
   onToggleAutoSplit: () => void;
   onSwapSeams: () => void;
@@ -44,6 +57,7 @@ interface ParamsTabProps {
 }
 
 const STEP_PRESETS = [10, 50, 100] as const;
+const WALL_ORDER: WallId[] = ['top', 'bottom', 'left', 'right'];
 
 function SplitSchematicIcon({ mode, active }: { mode: SplitMode; active: boolean }) {
   const stroke = active ? '#38bdf8' : '#7b8da6';
@@ -136,28 +150,8 @@ interface DimInputProps {
   onChange: (v: number) => void;
 }
 
-/**
- * Smooth keyboard-friendly numeric input:
- * Uses nullable string draft (`null` when idle) so users can select, clear completely,
- * and type freely; normalizes to [min, max] and updates the 3D model on Enter or onBlur.
- */
 function DimInput({ id, label, code, value, min, max, step, onChange }: DimInputProps) {
-  const [draft, setDraft] = useState<string | null>(null);
-
   const clamp = (v: number) => Math.max(min, Math.min(max, Math.round(v)));
-
-  const commitDraft = (raw: string | null) => {
-    setDraft(null);
-    if (raw === null) return;
-    const trimmed = raw.trim();
-    if (trimmed === '') return;
-    const parsed = Number(trimmed);
-    if (Number.isNaN(parsed)) return;
-    const next = clamp(parsed);
-    if (next !== value) {
-      onChange(next);
-    }
-  };
 
   return (
     <div className="rounded-lg border border-[#232e40] bg-[#151c27] p-2">
@@ -167,50 +161,20 @@ function DimInput({ id, label, code, value, min, max, step, onChange }: DimInput
         </label>
         <span className="font-mono text-[10px] font-semibold text-sky-400">{code}</span>
       </div>
-      <input
+      <NumericDraftInput
         id={id}
-        type="text"
-        inputMode="numeric"
-        autoComplete="off"
-        value={draft ?? String(value)}
-        onFocus={(e) => {
-          setDraft(String(value));
-          e.currentTarget.select();
-        }}
-        onChange={(e) => {
-          const clean = e.target.value.replace(/[^\d]/g, '');
-          setDraft(clean);
-        }}
-        onBlur={() => commitDraft(draft)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            commitDraft(draft);
-            e.currentTarget.blur();
-          } else if (e.key === 'Escape') {
-            setDraft(null);
-            e.currentTarget.blur();
-          } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            const next = clamp(value + step);
-            setDraft(String(next));
-            onChange(next);
-          } else if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            const next = clamp(value - step);
-            setDraft(String(next));
-            onChange(next);
-          }
-        }}
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onCommit={onChange}
         className="mb-1.5 w-full rounded bg-[#0d121a] px-1.5 py-1 text-center font-mono text-sm font-semibold tabular-nums text-slate-100 ring-1 ring-[#202b3c] outline-none focus:ring-sky-500/70"
       />
       <div className="grid grid-cols-2 gap-1">
         <button
           id={`btn-dec-${code}`}
           type="button"
-          onClick={() => {
-            setDraft(null);
-            onChange(clamp(value - step));
-          }}
+          onClick={() => onChange(clamp(value - step))}
           className="flex h-5 items-center justify-center rounded bg-[#1d2736] text-xs font-semibold text-slate-300 transition-colors hover:bg-[#273549] hover:text-white"
           aria-label={`Giảm ${label} ${step} mm`}
         >
@@ -219,10 +183,7 @@ function DimInput({ id, label, code, value, min, max, step, onChange }: DimInput
         <button
           id={`btn-inc-${code}`}
           type="button"
-          onClick={() => {
-            setDraft(null);
-            onChange(clamp(value + step));
-          }}
+          onClick={() => onChange(clamp(value + step))}
           className="flex h-5 items-center justify-center rounded bg-[#1d2736] text-xs font-semibold text-slate-300 transition-colors hover:bg-[#273549] hover:text-white"
           aria-label={`Tăng ${label} ${step} mm`}
         >
@@ -235,9 +196,13 @@ function DimInput({ id, label, code, value, min, max, step, onChange }: DimInput
 
 export function ParamsTab({
   config,
+  selectedPartCode,
+  onSelectPart,
   onChange,
   onDimensionChange,
   onSheetMaterialChange,
+  onUpdateEndConnection,
+  onCopyC1ToC2,
   onSelectSplitMode,
   onToggleAutoSplit,
   onSwapSeams,
@@ -246,22 +211,22 @@ export function ParamsTab({
 }: ParamsTabProps) {
   const [showCornerSeamEditor, setShowCornerSeamEditor] = useState(false);
   const [dimStep, setDimStep] = useState<number>(50);
-  const [stepDraft, setStepDraft] = useState<string | null>(null);
-
-  const commitStepDraft = (raw: string | null) => {
-    setStepDraft(null);
-    if (raw === null) return;
-    const trimmed = raw.trim();
-    const parsed = Number(trimmed);
-    if (!trimmed || Number.isNaN(parsed) || parsed < 1) return;
-    setDimStep(Math.max(1, Math.min(500, Math.round(parsed))));
-  };
 
   const sheetWidth = getSheetStandardWidth(config.sheetMaterial);
   const allowedThicknesses = getAllowedThicknesses(config.sheetMaterial);
-  const rec = evaluateSplitRecommendation(config.W, config.H, config.L, config.sheetMaterial);
+  const rec = evaluateSplitForConfig(
+    config.W,
+    config.H,
+    config.L,
+    config.sheetMaterial,
+    config.c1,
+    config.c2
+  );
   const activeSeams = resolveActiveSeams(config);
   const ribLayout = computeRibLayout(config.L, config.stiffenerRibs);
+  const blankPieces = calculateBlankAnalysis(config);
+  const selectedPiece = blankPieces.find((p) => p.partCode === selectedPartCode) ?? null;
+
   const hasAnyOverride = activeSeams.some((s) => s.isOverridden);
   const hasOverlapSeam =
     config.globalSeamType === 'weld_overlap' ||
@@ -283,6 +248,16 @@ export function ParamsTab({
     });
   };
 
+  // Seams belonging to the currently selected body piece
+  const selectedPieceSeams =
+    selectedPiece && !selectedPiece.isEndCap
+      ? activeSeams.filter(
+          (s) =>
+            selectedPiece.walls.includes(s.femaleWall) ||
+            selectedPiece.walls.includes(s.maleWall)
+        )
+      : [];
+
   return (
     <div className="space-y-4 pb-5">
       {/* Quick Presets */}
@@ -299,25 +274,42 @@ export function ParamsTab({
               config.H === preset.H &&
               config.L === preset.L &&
               config.sheetMaterial === preset.sheetMaterial &&
-              config.thickness === preset.thickness;
+              config.thickness === preset.thickness &&
+              config.c1.type === preset.c1.type &&
+              config.c2.type === preset.c2.type;
             return (
               <button
                 key={preset.id}
                 id={`preset-${preset.id}`}
                 type="button"
                 onClick={() => {
-                  const nextRec = evaluateSplitRecommendation(
+                  const nextC1 = {
+                    ...preset.c1,
+                    beChanEdges: { ...preset.c1.beChanEdges },
+                    endCapEdgeSeams: { ...preset.c1.endCapEdgeSeams },
+                  };
+                  const nextC2 = {
+                    ...preset.c2,
+                    beChanEdges: { ...preset.c2.beChanEdges },
+                    endCapEdgeSeams: { ...preset.c2.endCapEdgeSeams },
+                  };
+                  const nextRec = evaluateSplitForConfig(
                     preset.W,
                     preset.H,
                     preset.L,
-                    preset.sheetMaterial
+                    preset.sheetMaterial,
+                    nextC1,
+                    nextC2
                   );
+                  onSelectPart(null);
                   onChange({
                     W: preset.W,
                     H: preset.H,
                     L: preset.L,
                     sheetMaterial: preset.sheetMaterial,
                     thickness: preset.thickness,
+                    c1: nextC1,
+                    c2: nextC2,
                     autoSplit: true,
                     splitMode: nextRec.recommended,
                     seamOverrides: {},
@@ -339,6 +331,226 @@ export function ParamsTab({
         </div>
       </section>
 
+      {/* Interactive Piece / Face Selector (1-A, 1-B, 1-C, 1-D, 1-E, 1-F...) */}
+      <section className="space-y-2 border-t border-[#1e2838] pt-3.5">
+        <div className="flex items-center justify-between gap-1.5">
+          <h2 className="flex items-center gap-1 text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
+            <MousePointerClick className="h-3.5 w-3.5 text-sky-400" />
+            <span>Chọn mảnh / mặt (1-A, 1-B...)</span>
+          </h2>
+          {selectedPiece && (
+            <button
+              type="button"
+              onClick={() => onSelectPart(null)}
+              className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 hover:text-sky-300"
+            >
+              <X className="h-3 w-3" />
+              <span>Bỏ chọn</span>
+            </button>
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {blankPieces.map((p) => {
+            const active = selectedPartCode === p.partCode;
+            return (
+              <button
+                key={p.id}
+                id={`btn-part-${p.partCode}`}
+                type="button"
+                onClick={() => onSelectPart(active ? null : p.partCode)}
+                className={`rounded-md border px-2 py-1 text-left transition-colors ${
+                  active
+                    ? 'border-sky-400 bg-sky-500/22 text-white ring-1 ring-sky-400/50'
+                    : 'border-[#232e40] bg-[#141b26] text-slate-300 hover:border-[#354866]'
+                }`}
+              >
+                <div className="font-mono text-[11px] font-bold leading-tight text-sky-300">
+                  {p.partCode}
+                </div>
+                <div className="max-w-[100px] truncate text-[9.5px] text-slate-400">
+                  {p.isEndCap
+                    ? `Bịt ${p.endKey?.toUpperCase()}`
+                    : p.walls.length === 4
+                      ? '4 mặt (Chữ O)'
+                      : p.wallsLabel}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Contextual Inspector for Selected Piece/Face */}
+        {selectedPiece && (
+          <div
+            id="selected-part-inspector"
+            className="space-y-2 rounded-lg border border-sky-500/45 bg-[#111b2a] p-2.5 text-[11px]"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-semibold text-sky-100">
+                <span className="mr-1.5 rounded bg-sky-500/25 px-1.5 py-0.5 font-mono text-[10.5px] text-sky-200">
+                  {selectedPiece.partCode}
+                </span>
+                {selectedPiece.name}
+              </div>
+              <span className="font-mono text-[10px] text-sky-300">
+                {selectedPiece.developedWidth}×{selectedPiece.blankLength}
+              </span>
+            </div>
+
+            {selectedPiece.isEndCap && selectedPiece.endKey ? (
+              <div className="space-y-1">
+                <div className="text-[10px] font-semibold text-slate-400 uppercase">
+                  Tùy chỉnh đường mí ghép mảnh bịt {selectedPiece.partCode}
+                </div>
+                {WALL_ORDER.map((wall) => {
+                  const endK = selectedPiece.endKey!;
+                  const endConn = config[endK];
+                  const cur = getEndCapEdgeSeam(endConn, wall);
+                  return (
+                    <div
+                      key={wall}
+                      className="flex items-center justify-between gap-1.5 rounded bg-[#0c131f] px-2 py-1"
+                    >
+                      <span className="w-10 text-[10.5px] font-semibold text-slate-300">
+                        {WALL_LABELS[wall]}
+                      </span>
+                      <div className="grid flex-1 grid-cols-3 gap-1">
+                        {(
+                          [
+                            { tp: 'pittsburgh', lb: 'Mí gò' },
+                            { tp: 'weld_overlap', lb: 'Hàn chập' },
+                            { tp: 'weld_butt', lb: 'Hàn đấu đầu' },
+                          ] as { tp: SeamType; lb: string }[]
+                        ).map((opt) => (
+                          <button
+                            key={opt.tp}
+                            type="button"
+                            onClick={() =>
+                              onUpdateEndConnection(endK, {
+                                endCapEdgeSeams: {
+                                  ...endConn.endCapEdgeSeams,
+                                  [wall]: opt.tp,
+                                },
+                              })
+                            }
+                            className={`rounded py-0.5 text-[9.5px] font-medium ${
+                              cur === opt.tp
+                                ? 'bg-sky-500/30 text-sky-100 ring-1 ring-sky-400/60'
+                                : 'bg-[#151e2d] text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            {opt.lb}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {selectedPieceSeams.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-[10px] font-semibold text-slate-400 uppercase">
+                      Đường mí dọc của mảnh {selectedPiece.partCode}
+                    </div>
+                    {selectedPieceSeams.map((seam) => (
+                      <div key={seam.cornerId} className="rounded bg-[#0c131f] p-1.5">
+                        <div className="mb-1 flex items-center justify-between text-[10.5px]">
+                          <span className="font-semibold text-slate-200">{seam.label}</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onUpdateCornerSeam(seam.cornerId, {
+                                inverted: !config.seamOverrides[seam.cornerId]?.inverted,
+                              })
+                            }
+                            className="rounded bg-[#1b2738] px-1.5 py-0.5 text-[9.5px] text-sky-300 hover:bg-[#24344c]"
+                          >
+                            ⇄ Đảo góc
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1">
+                          {(
+                            [
+                              { tp: 'pittsburgh', lb: 'Mí gò' },
+                              { tp: 'weld_overlap', lb: 'Hàn chập' },
+                              { tp: 'weld_butt', lb: 'Hàn đấu đầu' },
+                            ] as const
+                          ).map((opt) => (
+                            <button
+                              key={opt.tp}
+                              type="button"
+                              onClick={() =>
+                                onUpdateCornerSeam(seam.cornerId, { seamType: opt.tp })
+                              }
+                              className={`rounded py-0.5 text-[9.5px] font-medium ${
+                                seam.seamType === opt.tp
+                                  ? 'bg-sky-500/30 text-sky-100 ring-1 ring-sky-400/60'
+                                  : 'bg-[#151e2d] text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              {opt.lb}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Quick per-wall Bẻ chân editor if C1 or C2 is be_chan */}
+                {(['c1', 'c2'] as const).map((endK) => {
+                  const endConn = config[endK];
+                  if (endConn.type !== 'be_chan') return null;
+                  return (
+                    <div key={endK} className="space-y-1">
+                      <div className="text-[10px] font-semibold text-slate-400 uppercase">
+                        Cạnh Bẻ chân ({endK.toUpperCase()}) trên {selectedPiece.partCode}
+                      </div>
+                      {selectedPiece.walls.map((w) => {
+                        const cur = endConn.beChanEdges[w];
+                        return (
+                          <div
+                            key={w}
+                            className="flex items-center justify-between gap-1.5 rounded bg-[#0c131f] px-2 py-1"
+                          >
+                            <span className="w-10 text-[10.5px] font-semibold text-slate-300">
+                              {WALL_LABELS[w]}
+                            </span>
+                            <div className="grid flex-1 grid-cols-3 gap-1">
+                              {(['in', 'out', 'straight'] as BeChanEdgeMode[]).map((m) => (
+                                <button
+                                  key={m}
+                                  type="button"
+                                  onClick={() =>
+                                    onUpdateEndConnection(endK, {
+                                      beChanEdges: { ...endConn.beChanEdges, [w]: m },
+                                    })
+                                  }
+                                  className={`rounded py-0.5 text-[9.5px] font-medium ${
+                                    cur === m
+                                      ? 'bg-sky-500/30 text-sky-100 ring-1 ring-sky-400/60'
+                                      : 'bg-[#151e2d] text-slate-400 hover:text-slate-200'
+                                  }`}
+                                >
+                                  {BE_CHAN_MODE_LABELS[m]}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
       {/* Dimensions W, H, L + Step Selector */}
       <section className="space-y-2.5 border-t border-[#1e2838] pt-3.5">
         <div className="flex items-center justify-between gap-1.5">
@@ -356,10 +568,7 @@ export function ParamsTab({
                   key={st}
                   id={`btn-step-${st}`}
                   type="button"
-                  onClick={() => {
-                    setDimStep(st);
-                    setStepDraft(null);
-                  }}
+                  onClick={() => setDimStep(st)}
                   className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold transition-colors ${
                     active
                       ? 'bg-sky-500/25 text-sky-200 ring-1 ring-sky-500/50'
@@ -370,29 +579,15 @@ export function ParamsTab({
                 </button>
               );
             })}
-            <input
+            <NumericDraftInput
               id="input-custom-step"
-              type="text"
-              inputMode="numeric"
-              autoComplete="off"
+              value={dimStep}
+              min={1}
+              max={500}
+              step={5}
               title="Nhập bước nhảy tùy chỉnh (mm)"
-              aria-label="Bước nhảy tùy chỉnh (mm)"
-              value={stepDraft ?? String(dimStep)}
-              onFocus={(e) => {
-                setStepDraft(String(dimStep));
-                e.currentTarget.select();
-              }}
-              onChange={(e) => setStepDraft(e.target.value.replace(/[^\d]/g, ''))}
-              onBlur={() => commitStepDraft(stepDraft)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  commitStepDraft(stepDraft);
-                  e.currentTarget.blur();
-                } else if (e.key === 'Escape') {
-                  setStepDraft(null);
-                  e.currentTarget.blur();
-                }
-              }}
+              ariaLabel="Bước nhảy tùy chỉnh (mm)"
+              onCommit={setDimStep}
               className="w-9 rounded border border-[#243043] bg-[#0d121a] px-1 py-0.5 text-center font-mono text-[10px] font-semibold tabular-nums text-sky-300 outline-none focus:border-sky-500/70"
             />
           </div>
@@ -432,7 +627,7 @@ export function ParamsTab({
         </div>
 
         {/* Metrics Strip */}
-        <div className="grid grid-cols-2 gap-2 rounded-lg border border-[#1f2939] bg-[#0d121a] px-2.5 py-1.5 text-[11px]">
+        <div className="grid grid-cols-2 gap-x-2 gap-y-1 rounded-lg border border-[#1f2939] bg-[#0d121a] px-2.5 py-1.5 text-[11px]">
           <div className="flex items-center justify-between">
             <span className="text-slate-400">Chu vi 2(W+H):</span>
             <span
@@ -444,19 +639,19 @@ export function ParamsTab({
             </span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-slate-400">Nửa CV (W+H):</span>
+            <span className="text-slate-400">L phôi thân:</span>
             <span
               className={`font-mono font-medium tabular-nums ${
-                rec.halfPerimeter > 3000 ? 'text-amber-300' : 'text-slate-200'
+                rec.blankLength > sheetWidth ? 'text-amber-300' : 'text-sky-300'
               }`}
             >
-              {rec.halfPerimeter} mm
+              {rec.blankLength} mm
             </span>
           </div>
         </div>
       </section>
 
-      {/* Sheet Material Selector: Tôn Mạ Kẽm (1200mm) vs Inox (1250mm) */}
+      {/* Sheet Material Selector: Tôn Mạ Kẽm (1200mm) vs Inox (1250mm — KHÔNG mô tả thừa) */}
       <section className="space-y-2 border-t border-[#1e2838] pt-3.5">
         <div className="flex items-center justify-between">
           <h2 className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
@@ -478,7 +673,7 @@ export function ParamsTab({
               {
                 id: 'inox',
                 title: SHEET_MATERIAL_LABELS.inox,
-                sub: 'Xước mịn • Khổ 1250 mm',
+                sub: 'Khổ 1250 mm',
               },
             ] as const
           ).map((mat) => {
@@ -545,6 +740,14 @@ export function ParamsTab({
           </p>
         )}
       </section>
+
+      {/* Stage 2: End Connections Library */}
+      <EndConnectionPanel
+        c1={config.c1}
+        c2={config.c2}
+        onUpdateEnd={onUpdateEndConnection}
+        onCopyC1ToC2={onCopyC1ToC2}
+      />
 
       {/* Piece Splitting */}
       <section className="space-y-2.5 border-t border-[#1e2838] pt-3.5">
@@ -623,7 +826,7 @@ export function ParamsTab({
         </button>
       </section>
 
-      {/* Longitudinal Seams Configuration */}
+      {/* Longitudinal Seams Configuration (Hàn chập & Hàn đấu đầu) */}
       <section className="space-y-2.5 border-t border-[#1e2838] pt-3.5">
         <div className="flex items-center justify-between">
           <h2 className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
@@ -662,7 +865,7 @@ export function ParamsTab({
                     className="inline-flex items-center gap-1 rounded bg-amber-500/20 px-2 py-0.5 text-[11px] font-semibold text-amber-100 ring-1 ring-amber-400/40 hover:bg-amber-500/30"
                   >
                     <Flame className="h-3 w-3" />
-                    <span>Áp dụng Mí hàn chồng ({config.weldOverlapWidth} mm)</span>
+                    <span>Áp dụng Hàn chập ({config.weldOverlapWidth} mm)</span>
                   </button>
                 )}
               </div>
@@ -675,7 +878,7 @@ export function ParamsTab({
           {(
             [
               { type: 'pittsburgh', label: 'Mí gò', sub: '+31 / +7' },
-              { type: 'weld_overlap', label: 'Hàn chồng', sub: `${config.weldOverlapWidth} mm` },
+              { type: 'weld_overlap', label: 'Hàn chập', sub: `${config.weldOverlapWidth} mm` },
               { type: 'weld_butt', label: 'Hàn đấu đầu', sub: '0 – 0' },
             ] as const
           ).map((item) => {
@@ -704,7 +907,7 @@ export function ParamsTab({
           <div className="rounded-lg border border-[#232e40] bg-[#151c27] px-2.5 py-2">
             <div className="mb-1.5 flex items-center justify-between text-[11px]">
               <label htmlFor="slider-weld-overlap" className="font-medium text-slate-300">
-                Độ rộng mí hàn chồng (7–25 mm)
+                Độ rộng mí hàn chập (7–25 mm)
               </label>
               <span className="font-mono font-semibold text-amber-300">
                 {config.weldOverlapWidth} mm
@@ -781,8 +984,8 @@ export function ParamsTab({
                     {(
                       [
                         { type: 'pittsburgh', label: 'Mí gò' },
-                        { type: 'weld_overlap', label: 'Hàn chồng' },
-                        { type: 'weld_butt', label: 'Hàn 0–0' },
+                        { type: 'weld_overlap', label: 'Hàn chập' },
+                        { type: 'weld_butt', label: 'Hàn đấu đầu' },
                       ] as const
                     ).map((opt) => (
                       <button

@@ -23,8 +23,8 @@ export type SeamState = 'unseamed' | 'seamed';
 
 /**
  * Viewport shading mode:
- * - 'realistic': renders the selected sheetMaterial ('galvanized' mini-spangle or 'inox' brushed stainless)
- * - 'technical': renders color-coded engineering zones (Red Female, Blue Male, Green Bend, Amber Weld)
+ * - 'realistic': renders selected sheetMaterial ('galvanized' mini-spangle or 'inox')
+ * - 'technical': renders color-coded engineering zones (Red Female, Blue Male, Yellow Flange, Green Bend, Orange Weld)
  */
 export type MaterialMode = 'realistic' | 'technical';
 
@@ -45,6 +45,64 @@ export interface CornerSeamOverride {
   inverted?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Stage 2 (Revised M1.2): End Connections Library (SPEC 3.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Integral sheet-metal ends (Bích liền thân ống):
+ *   tdc_tdf, nep_c, be_chan, lcct, end_cap, plain
+ * Detached structural frames (Bích rời — KHÔNG vẽ lỗ):
+ *   bich_v_out, bich_v_in, bich_u
+ */
+export type EndConnectionType =
+  | 'tdc_tdf' // Bích TDC/TDF liền thân (+48 mm, cao 32 mm, 4 ke góc lỗ giọt nước, tùy chọn dấu lõm sát góc)
+  | 'nep_c' // Nẹp C liền thân (+12.5 mm uốn cong vòng 180° tạo rãnh hình chữ C, hở 4 góc)
+  | 'be_chan' // Đầu bẻ chân tùy biến từng cạnh Trên/Dưới/Trái/Phải (Bẻ vào | Bẻ ra | Để thẳng, +F mm)
+  | 'lcct' // Đầu gắn Lưới chắn côn trùng (+20 mm chấn vào trong + khung lưới ô vuông)
+  | 'end_cap' // Đầu bịt kín (4 cạnh tùy biến Mí gò / Hàn chập / Hàn đấu đầu + Mảnh bịt đầu rời 1-E/1-F...)
+  | 'plain' // Đầu để thẳng (+L_thẳng mm đoạn kéo dài trơn không chạy mí lắp cửa gió / van gió)
+  | 'bich_v_out' // Bích V rời quay ngoài (V30/40/50 thường W+5 hoặc EI W-3; V80×30 cánh 30 lọt lòng W-3)
+  | 'bich_v_in' // Bích V rời quay trong (phủ bì W-3 × H-3, thay thế TDC/TDF quay trong)
+  | 'bich_u'; // Bích U rời (lệch cánh ôm × mặt bích × gờ bẻ ngoài cố định 10 mm quay về thân)
+
+export type BichVSpec = 'V30x30' | 'V40x40' | 'V50x50' | 'V80x30';
+export type BichVThickness = 2 | 3 | 4;
+export type BichVOutStyle = 'standard' | 'ei';
+export type BichUThickness = 1.5 | 2 | 3;
+export type BeChanEdgeMode = 'in' | 'out' | 'straight';
+export type BeChanEdges = Record<WallId, BeChanEdgeMode>;
+
+export const BICH_V_SPECS: readonly BichVSpec[] = ['V30x30', 'V40x40', 'V50x50', 'V80x30'] as const;
+export const BICH_V_IN_SPECS: readonly BichVSpec[] = ['V30x30', 'V40x40', 'V50x50'] as const;
+export const BICH_V_THICKNESSES: readonly BichVThickness[] = [2, 3, 4] as const;
+export const BICH_U_THICKNESSES: readonly BichUThickness[] = [1.5, 2, 3] as const;
+
+export interface EndConnectionConfig {
+  type: EndConnectionType;
+  /** TDC/TDF: tùy chọn dấu lõm nhỏ phân biệt đầu ở cạnh đầu sát góc (mặc định TẮT với ống thẳng) */
+  showEndIndent: boolean;
+  /** Bích V rời */
+  bichVSpec: BichVSpec;
+  bichVThickness: BichVThickness;
+  bichVOutStyle: BichVOutStyle;
+  /** Bích U rời (gờ bẻ ngoài cố định 10 mm quay ngược về phía thân ống) */
+  bichUThickness: BichUThickness;
+  bichUWrapLeg: number; // Cánh ôm thân ống (mặc định 30 mm)
+  bichUFlangeFace: number; // Mặt bích phẳng (mặc định 40 mm)
+  /** Đầu bẻ chân tùy biến độc lập từng cạnh Trên / Dưới / Trái / Phải */
+  beChanEdges: BeChanEdges;
+  beChanWidth: number; // F (mặc định 20 mm)
+  /** Đầu để thẳng: đoạn kéo dài lắp cửa gió/van gió (mặc định 0 mm, không chạy mí trên suốt đoạn này) */
+  plainExtensionMm: number;
+  /** Đầu gắn LCCT */
+  showLcctMesh: boolean;
+  /** Đầu bịt kín: cho phép tự do chuyển đổi từng cạnh ghép sang Mí gò / Hàn chập / Hàn đấu đầu */
+  endCapSeamType: SeamType;
+  endCapWeldOverlapWidth: number; // 7–25 mm (mặc định 10 mm)
+  endCapEdgeSeams: Partial<Record<WallId, SeamType>>;
+}
+
 export interface DuctConfig {
   W: number; // Width (mm)
   H: number; // Height / Depth (mm)
@@ -57,9 +115,12 @@ export interface DuctConfig {
   weldOverlapWidth: number; // 7–25 mm (default 10 mm)
   swapSeamRoles: boolean; // Global Đảo mí kép ↔ mí đơn
   seamOverrides: Partial<Record<CornerId, CornerSeamOverride>>;
+  c1: EndConnectionConfig; // Đầu C1 (z = +L/2, hướng phía trước)
+  c2: EndConnectionConfig; // Đầu C2 (z = -L/2, hướng phía sau)
   seamState: SeamState; // Chưa gò mí ↔ Đã gò mí
   explode: number; // 0 to 100 (%)
   stiffenerRibs: boolean; // Gân tăng cứng thẳng
+  showFaceLabels: boolean; // Nhãn mặt đánh dấu trong lòng ống (1-A, 1-B, 1-C...) — mặc định BẬT
   materialMode: MaterialMode; // Vật liệu thật (Tôn Mạ Kẽm / Inox) ↔ Tô màu kỹ thuật
 }
 
@@ -68,7 +129,7 @@ export interface ResolvedCornerSeam {
   label: string;
   seamType: SeamType;
   weldOverlapWidth: number;
-  femaleWall: WallId; // Also acts as overlap-flap wall for weld_overlap
+  femaleWall: WallId; // Also acts as overlap-flap wall for weld_overlap (Hàn chập)
   maleWall: WallId;
   isOverridden: boolean;
 }
@@ -78,6 +139,9 @@ export interface SplitRecommendation {
   reason: string;
   perimeter: number;
   halfPerimeter: number;
+  blankLength: number;
+  c1Allowance: number;
+  c2Allowance: number;
   sheetStandardWidth: number;
   rotateLongitudinal: boolean;
   exceedsSheetWidth: boolean;
@@ -85,7 +149,11 @@ export interface SplitRecommendation {
 
 export interface PieceBlankInfo {
   id: string;
+  /** Standard sequential piece/face code: '1-A', '1-B', '1-C', '1-D', '1-E', '1-F'... */
+  partCode: string;
   name: string;
+  isEndCap?: boolean;
+  endKey?: 'c1' | 'c2';
   walls: WallId[];
   wallsLabel: string;
   wallSpanSum: number; // mm (pure duct walls without seam allowances)
@@ -93,8 +161,13 @@ export interface PieceBlankInfo {
   startAllowance: number; // mm
   endSeamLabel: string;
   endAllowance: number; // mm
+  c1Allowance: number; // mm
+  c1Label: string;
+  c2Allowance: number; // mm
+  c2Label: string;
+  baseLength: number; // mm (L or H)
   developedWidth: number; // mm (total flat blank width across cross-section)
-  blankLength: number; // mm (along L)
+  blankLength: number; // mm (L + c1Allowance + c2Allowance, or cap height + allowances)
   bendCount: number; // number of 90° body bends
   areaM2: number; // m²
   cutOrientation: 'ngang_chuan' | 'doc_6000' | 'can_noi_c';

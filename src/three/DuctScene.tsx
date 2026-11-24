@@ -15,6 +15,8 @@ interface CameraCommand {
 interface DuctSceneProps {
   config: DuctConfig;
   cameraCommand: CameraCommand;
+  selectedPartCode: string | null;
+  onSelectPart: (partCode: string | null) => void;
 }
 
 interface CameraControllerProps {
@@ -32,8 +34,13 @@ function computePresetPose(
   const wM = W * MM_TO_M;
   const hM = H * MM_TO_M;
   const lM = L * MM_TO_M;
+  const flangePad = 0.08;
   const explodePad = (explode / 100) * Math.min(0.45, Math.max(wM, hM) * 0.48);
-  const diag = Math.max(0.45, Math.hypot(wM + explodePad, hM + explodePad, lM));
+  const explodeAxialPad = (explode / 100) * 0.34;
+  const diag = Math.max(
+    0.48,
+    Math.hypot(wM + flangePad + explodePad, hM + flangePad + explodePad, lM + explodeAxialPad)
+  );
 
   switch (preset) {
     case 'seam_closeup': {
@@ -161,7 +168,12 @@ function CameraRig({ config, cameraCommand }: CameraControllerProps) {
   );
 }
 
-export function DuctScene({ config, cameraCommand }: DuctSceneProps) {
+export function DuctScene({
+  config,
+  cameraCommand,
+  selectedPartCode,
+  onSelectPart,
+}: DuctSceneProps) {
   const halfHM = (config.H / 2) * MM_TO_M;
   const explodeExtraM =
     config.splitMode === '1_piece'
@@ -177,6 +189,7 @@ export function DuctScene({ config, cameraCommand }: DuctSceneProps) {
         shadows
         dpr={[1, 2]}
         camera={{ fov: 36, near: 0.005, far: 80, position: [1.0, 0.65, 1.3] }}
+        onPointerMissed={() => onSelectPart(null)}
         gl={{
           alpha: true,
           antialias: true,
@@ -276,7 +289,11 @@ export function DuctScene({ config, cameraCommand }: DuctSceneProps) {
         />
 
         {/* 3D Duct Parametric Model */}
-        <DuctAssembly config={config} />
+        <DuctAssembly
+          config={config}
+          selectedPartCode={selectedPartCode}
+          onSelectPart={onSelectPart}
+        />
 
         {/* Subtle Technical Floor Grid & Contact Shadows */}
         <Grid
@@ -294,7 +311,7 @@ export function DuctScene({ config, cameraCommand }: DuctSceneProps) {
         />
 
         <ContactShadows
-          key={`${config.W}-${config.H}-${config.L}-${config.splitMode}-${Math.round(config.explode / 5)}`}
+          key={`${config.W}-${config.H}-${config.L}-${config.splitMode}-${config.c1.type}-${config.c2.type}-${Math.round(config.explode / 5)}`}
           position={[0, floorY + 0.002, 0]}
           opacity={0.42}
           scale={shadowExtent * 2.2}

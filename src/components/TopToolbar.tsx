@@ -5,6 +5,7 @@ import {
   Layers,
   Palette,
   Sparkles,
+  Tag,
   Wrench,
 } from 'lucide-react';
 import { SHEET_MATERIAL_LABELS } from '../domain/ductRules';
@@ -94,8 +95,8 @@ export function TopToolbar({ config, onChange, onSwapSeams }: TopToolbarProps) {
         </div>
       </div>
 
-      {/* Right group: Explode slider + Ribs toggle + Swap Seams */}
-      <div className="flex flex-wrap items-center gap-2">
+      {/* Right group: Explode slider + Face Labels toggle + Ribs toggle + Swap Seams */}
+      <div className="flex flex-wrap items-center gap-1.5">
         {/* Explode Slider */}
         <div className="flex items-center gap-1.5 rounded-lg border border-[#243043] bg-[#0c1119] px-2 py-1">
           <button
@@ -116,13 +117,38 @@ export function TopToolbar({ config, onChange, onSwapSeams }: TopToolbarProps) {
             step={1}
             value={config.explode}
             onChange={(e) => onChange({ explode: Number(e.target.value) })}
-            className="cad-slider w-20 xl:w-24"
+            className="cad-slider w-18 xl:w-22"
             aria-label="Thanh trượt tách mảnh"
           />
           <span className="w-8 text-right font-mono text-[11.5px] font-medium tabular-nums text-sky-300">
             {config.explode}%
           </span>
         </div>
+
+        {/* Inner Face Markings Toggle: Nhãn mặt (1-A, 1-B...) */}
+        <button
+          id="btn-toggle-face-labels"
+          type="button"
+          onClick={() => onChange({ showFaceLabels: !config.showFaceLabels })}
+          className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11.5px] font-medium whitespace-nowrap transition-colors ${
+            config.showFaceLabels
+              ? 'border-sky-500/40 bg-sky-500/15 text-sky-200'
+              : 'border-[#243043] bg-[#0c1119] text-slate-400 hover:border-[#334560] hover:text-slate-200'
+          }`}
+          title="Bật/tắt chữ đánh dấu mảnh/mặt trong lòng ống (1-A, 1-B, 1-C...)"
+        >
+          <Tag className="h-3.5 w-3.5 shrink-0" />
+          <span>Nhãn mặt</span>
+          <span
+            className={`rounded px-1 py-0.5 font-mono text-[9.5px] leading-none ${
+              config.showFaceLabels
+                ? 'bg-sky-400/20 text-sky-200'
+                : 'bg-slate-800 text-slate-500'
+            }`}
+          >
+            {config.showFaceLabels ? 'BẬT' : 'TẮT'}
+          </span>
+        </button>
 
         {/* Stiffener Ribs Toggle */}
         <button

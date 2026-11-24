@@ -2,6 +2,7 @@ import { FileSpreadsheet, FileText, PanelLeftClose, SlidersHorizontal } from 'lu
 import type {
   CornerId,
   DuctConfig,
+  EndConnectionConfig,
   SeamType,
   SheetMaterialType,
   SidebarTab,
@@ -16,9 +17,13 @@ interface LeftSidebarProps {
   onSelectTab: (tab: SidebarTab) => void;
   onCollapse: () => void;
   config: DuctConfig;
+  selectedPartCode: string | null;
+  onSelectPart: (partCode: string | null) => void;
   onChange: (patch: Partial<DuctConfig>) => void;
   onDimensionChange: (dim: 'W' | 'H' | 'L', value: number) => void;
   onSheetMaterialChange: (material: SheetMaterialType) => void;
+  onUpdateEndConnection: (end: 'c1' | 'c2', patch: Partial<EndConnectionConfig>) => void;
+  onCopyC1ToC2: () => void;
   onSelectSplitMode: (mode: SplitMode) => void;
   onToggleAutoSplit: () => void;
   onSwapSeams: () => void;
@@ -34,9 +39,13 @@ export function LeftSidebar({
   onSelectTab,
   onCollapse,
   config,
+  selectedPartCode,
+  onSelectPart,
   onChange,
   onDimensionChange,
   onSheetMaterialChange,
+  onUpdateEndConnection,
+  onCopyC1ToC2,
   onSelectSplitMode,
   onToggleAutoSplit,
   onSwapSeams,
@@ -68,8 +77,8 @@ export function LeftSidebar({
         </div>
 
         <div className="flex items-center gap-1.5">
-          <span className="rounded bg-[#1a2433] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-400">
-            M1.1
+          <span className="rounded bg-[#1a2433] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-sky-300">
+            M1.2
           </span>
           <button
             id="btn-collapse-sidebar"
@@ -116,9 +125,13 @@ export function LeftSidebar({
         {activeTab === 'params' && (
           <ParamsTab
             config={config}
+            selectedPartCode={selectedPartCode}
+            onSelectPart={onSelectPart}
             onChange={onChange}
             onDimensionChange={onDimensionChange}
             onSheetMaterialChange={onSheetMaterialChange}
+            onUpdateEndConnection={onUpdateEndConnection}
+            onCopyC1ToC2={onCopyC1ToC2}
             onSelectSplitMode={onSelectSplitMode}
             onToggleAutoSplit={onToggleAutoSplit}
             onSwapSeams={onSwapSeams}
@@ -127,7 +140,13 @@ export function LeftSidebar({
           />
         )}
         {activeTab === 'lsx' && <LsxTab config={config} onApplyConfig={onChange} />}
-        {activeTab === 'blank' && <BlankAnalysisTab config={config} />}
+        {activeTab === 'blank' && (
+          <BlankAnalysisTab
+            config={config}
+            selectedPartCode={selectedPartCode}
+            onSelectPart={onSelectPart}
+          />
+        )}
       </div>
     </aside>
   );

@@ -4,7 +4,7 @@ import { TopToolbar } from './components/TopToolbar';
 import { ViewportOverlays } from './components/ViewportOverlays';
 import {
   DEFAULT_DUCT_CONFIG,
-  evaluateSplitRecommendation,
+  evaluateSplitForConfig,
   normalizeThicknessForMaterial,
 } from './domain/ductRules';
 import { DuctScene } from './three/DuctScene';
@@ -12,6 +12,7 @@ import type {
   CameraPreset,
   CornerId,
   DuctConfig,
+  EndConnectionConfig,
   SeamType,
   SheetMaterialType,
   SidebarTab,
@@ -22,6 +23,7 @@ export function App() {
   const [config, setConfig] = useState<DuctConfig>(DEFAULT_DUCT_CONFIG);
   const [activeTab, setActiveTab] = useState<SidebarTab>('params');
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
+  const [selectedPartCode, setSelectedPartCode] = useState<string | null>(null);
   const [cameraCommand, setCameraCommand] = useState<{ preset: CameraPreset; seq: number }>({
     preset: 'iso',
     seq: 0,
@@ -35,7 +37,14 @@ export function App() {
     setConfig((prev) => {
       const next = { ...prev, [dim]: value };
       if (next.autoSplit) {
-        const rec = evaluateSplitRecommendation(next.W, next.H, next.L, next.sheetMaterial);
+        const rec = evaluateSplitForConfig(
+          next.W,
+          next.H,
+          next.L,
+          next.sheetMaterial,
+          next.c1,
+          next.c2
+        );
         if (rec.recommended !== next.splitMode) {
           next.splitMode = rec.recommended;
           next.seamOverrides = {};
@@ -54,7 +63,66 @@ export function App() {
         thickness: nextThickness,
       };
       if (next.autoSplit) {
-        const rec = evaluateSplitRecommendation(next.W, next.H, next.L, material);
+        const rec = evaluateSplitForConfig(next.W, next.H, next.L, material, next.c1, next.c2);
+        if (rec.recommended !== next.splitMode) {
+          next.splitMode = rec.recommended;
+          next.seamOverrides = {};
+        }
+      }
+      return next;
+    });
+  }, []);
+
+  const handleUpdateEndConnection = useCallback(
+    (end: 'c1' | 'c2', patch: Partial<EndConnectionConfig>) => {
+      setConfig((prev) => {
+        const next: DuctConfig = {
+          ...prev,
+          [end]: {
+            ...prev[end],
+            ...patch,
+          },
+        };
+        if (next.autoSplit) {
+          const rec = evaluateSplitForConfig(
+            next.W,
+            next.H,
+            next.L,
+            next.sheetMaterial,
+            next.c1,
+            next.c2
+          );
+          if (rec.recommended !== next.splitMode) {
+            next.splitMode = rec.recommended;
+            next.seamOverrides = {};
+          }
+        }
+        return next;
+      });
+    },
+    []
+  );
+
+  const handleCopyC1ToC2 = useCallback(() => {
+    setConfig((prev) => {
+      const nextC2: EndConnectionConfig = {
+        ...prev.c1,
+        beChanEdges: { ...prev.c1.beChanEdges },
+        endCapEdgeSeams: { ...prev.c1.endCapEdgeSeams },
+      };
+      const next: DuctConfig = {
+        ...prev,
+        c2: nextC2,
+      };
+      if (next.autoSplit) {
+        const rec = evaluateSplitForConfig(
+          next.W,
+          next.H,
+          next.L,
+          next.sheetMaterial,
+          next.c1,
+          next.c2
+        );
         if (rec.recommended !== next.splitMode) {
           next.splitMode = rec.recommended;
           next.seamOverrides = {};
@@ -65,8 +133,16 @@ export function App() {
   }, []);
 
   const handleSelectSplitMode = useCallback((mode: SplitMode) => {
+    setSelectedPartCode(null);
     setConfig((prev) => {
-      const rec = evaluateSplitRecommendation(prev.W, prev.H, prev.L, prev.sheetMaterial);
+      const rec = evaluateSplitForConfig(
+        prev.W,
+        prev.H,
+        prev.L,
+        prev.sheetMaterial,
+        prev.c1,
+        prev.c2
+      );
       return {
         ...prev,
         splitMode: mode,
@@ -80,7 +156,14 @@ export function App() {
     setConfig((prev) => {
       const nextAuto = !prev.autoSplit;
       if (nextAuto) {
-        const rec = evaluateSplitRecommendation(prev.W, prev.H, prev.L, prev.sheetMaterial);
+        const rec = evaluateSplitForConfig(
+          prev.W,
+          prev.H,
+          prev.L,
+          prev.sheetMaterial,
+          prev.c1,
+          prev.c2
+        );
         return {
           ...prev,
           autoSplit: true,
@@ -138,9 +221,13 @@ export function App() {
           onSelectTab={setActiveTab}
           onCollapse={() => setSidebarOpen(false)}
           config={config}
+          selectedPartCode={selectedPartCode}
+          onSelectPart={setSelectedPartCode}
           onChange={handlePatchConfig}
           onDimensionChange={handleDimensionChange}
           onSheetMaterialChange={handleSheetMaterialChange}
+          onUpdateEndConnection={handleUpdateEndConnection}
+          onCopyC1ToC2={handleCopyC1ToC2}
           onSelectSplitMode={handleSelectSplitMode}
           onToggleAutoSplit={handleToggleAutoSplit}
           onSwapSeams={handleSwapSeams}
@@ -157,10 +244,17 @@ export function App() {
           onSwapSeams={handleSwapSeams}
         />
         <div className="relative min-h-0 flex-1 overflow-hidden">
-          <DuctScene config={config} cameraCommand={cameraCommand} />
+          <DuctScene
+            config={config}
+            cameraCommand={cameraCommand}
+            selectedPartCode={selectedPartCode}
+            onSelectPart={setSelectedPartCode}
+          />
           <ViewportOverlays
             config={config}
             sidebarOpen={sidebarOpen}
+            selectedPartCode={selectedPartCode}
+            onClearSelection={() => setSelectedPartCode(null)}
             onExpandSidebar={() => setSidebarOpen(true)}
             onCameraPreset={handleCameraPreset}
           />

@@ -12,6 +12,15 @@ import {
   resolveActiveSeams,
 } from './ductRules';
 
+import {
+  appendPieceIntegralEndFlanges,
+  buildAllEndAccessories,
+  type BuiltAccessoryMesh,
+  type BuiltFaceLabel,
+  type ExtendedMaterialZone,
+  type Rotation2D,
+} from './endConnectionBuilder';
+
 export const MM_TO_M = 0.001;
 
 /**
@@ -21,8 +30,9 @@ export const MM_TO_M = 0.001;
  * 2 = Male Pittsburgh seam (Mí đơn — Blue in technical mode)
  * 3 = 90° Body bend line (Đường chấn — Green in technical mode)
  * 4 = Welded seam zone (Mí hàn — Amber/Orange in technical mode)
+ * 5 = Integral End Flange / Collar (Bích kết nối — Yellow in technical mode)
  */
-export type MaterialZone = 0 | 1 | 2 | 3 | 4;
+export type MaterialZone = ExtendedMaterialZone;
 
 interface Vec2 {
   x: number;
@@ -54,15 +64,19 @@ export interface BuiltWeldBead {
 
 export interface BuiltPieceMesh {
   id: string;
+  partCode: string; // '1-A', '1-B', '1-C', '1-D'
   name: string;
+  walls: WallId[];
   geometry: THREE.BufferGeometry;
   edgesGeometry: THREE.EdgesGeometry;
   offset: [number, number, number]; // meters
+  faceLabels: BuiltFaceLabel[];
 }
 
 export interface BuiltDuctAssembly {
   pieces: BuiltPieceMesh[];
   weldBeads: BuiltWeldBead[];
+  accessories: BuiltAccessoryMesh[];
   boundingSizeM: [number, number, number];
 }
 
@@ -390,6 +404,7 @@ function appendSubdividedWall(
 interface PiecePolyline {
   nodes: PolyNode[];
   metas: PolySegmentMeta[];
+  wallRotations: Partial<Record<WallId, Rotation2D[]>>;
 }
 
 function buildPiecePolyline(
@@ -517,6 +532,12 @@ function buildPiecePolyline(
   // 2) When "Tách mảnh" (unfoldRatio > 0), smoothly open the 3 body bends outward
   //    around the fixed Bottom wall so the trainee sees how the 1-piece sheet folds!
   // -------------------------------------------------------------------------
+  const wallRotations: Partial<Record<WallId, Rotation2D[]>> = {};
+  const addWallRot = (wall: WallId, pivot: Vec2, angle: number) => {
+    if (!wallRotations[wall]) wallRotations[wall] = [];
+    wallRotations[wall]!.push({ pivot, angle });
+  };
+
   if (isSinglePiece && bendCornerIndices.length === 3) {
     // Walls order: ['top', 'left', 'bottom', 'right']
     // bendCornerIndices: [0: TL, 1: BL, 2: BR]
@@ -534,6 +555,7 @@ function buildPiecePolyline(
         // Rotate 'right' wall (nodes > brIdx) clockwise (-angle) around BR outward (+X)
         const angle = -Math.asin(Math.min(0.25, liftMm / Math.max(80, H))) * unseamed;
         const pivot = { ...nodes[brIdx] };
+        addWallRot('right', pivot, angle);
         for (let i = brIdx + 1; i < nodes.length; i++) {
           nodes[i] = rotatePoint2(nodes[i], pivot, angle);
         }
@@ -547,6 +569,7 @@ function buildPiecePolyline(
         // Male wall is 'top' (nodes < tlIdx) -> rotate CCW (+angle) around TL outward (+Y)
         const angle = Math.asin(Math.min(0.25, liftMm / Math.max(80, W))) * unseamed;
         const pivot = { ...nodes[tlIdx] };
+        addWallRot('top', pivot, angle);
         for (let i = 0; i < tlIdx; i++) {
           nodes[i] = rotatePoint2(nodes[i], pivot, angle);
         }
@@ -566,6 +589,7 @@ function buildPiecePolyline(
 
       // First open Top around TL (CCW +delta)
       const tlPivot = { ...nodes[tlIdx] };
+      addWallRot('top', tlPivot, delta);
       for (let i = 0; i < tlIdx; i++) {
         nodes[i] = rotatePoint2(nodes[i], tlPivot, delta);
       }
@@ -577,6 +601,8 @@ function buildPiecePolyline(
 
       // Then open Left + Top together around BL (CCW +delta)
       const blPivot = { ...nodes[blIdx] };
+      addWallRot('top', blPivot, delta);
+      addWallRot('left', blPivot, delta);
       for (let i = 0; i < blIdx; i++) {
         nodes[i] = rotatePoint2(nodes[i], blPivot, delta);
       }
@@ -588,6 +614,7 @@ function buildPiecePolyline(
 
       // Open Right around BR (CW -delta)
       const brPivot = { ...nodes[brIdx] };
+      addWallRot('right', brPivot, -delta);
       for (let i = brIdx + 1; i < nodes.length; i++) {
         nodes[i] = rotatePoint2(nodes[i], brPivot, -delta);
       }
@@ -599,7 +626,7 @@ function buildPiecePolyline(
     }
   }
 
-  return { nodes, metas };
+  return { nodes, metas, wallRotations };
 }
 
 // ---------------------------------------------------------------------------
@@ -710,10 +737,12 @@ function evalRibSpanFade(spanMm: number, totalSpanMm: number): number {
  */
 function extrudeSheetPolyline(
   poly: PiecePolyline,
-  L: number,
-  t: number,
+  walls: WallId[],
+  config: DuctConfig,
+  seamLockProgress: number,
   ribZPositions: number[]
 ): THREE.BufferGeometry {
+  const { L, thickness: t } = config;
   const { nodes, metas } = poly;
   const nNodes = nodes.length;
   const nSegs = nNodes - 1;
@@ -782,13 +811,14 @@ function extrudeSheetPolyline(
   // UV scale: 1.0 UV = 280 mm so mini-spangle crystal scale stays realistic at all duct sizes
   const uvScale = 1 / 280;
 
-  // Separate triangle buffers per MaterialZone (0..4)
+  // Separate triangle buffers per MaterialZone (0..5)
   const zoneBuffers: Record<MaterialZone, ZoneTriangleBuffers> = {
     0: { positions: [], uvs: [] },
     1: { positions: [], uvs: [] },
     2: { positions: [], uvs: [] },
     3: { positions: [], uvs: [] },
     4: { positions: [], uvs: [] },
+    5: { positions: [], uvs: [] },
   };
 
   // Helper to evaluate node XY at a given Z (applying outward stiffener rib displacement ONLY on flat rib walls)
@@ -1108,13 +1138,16 @@ function extrudeSheetPolyline(
     }
   }
 
+  // 5b. Append integral end flanges (C1 & C2) for this piece's walls
+  appendPieceIntegralEndFlanges(zoneBuffers, walls, poly.wallRotations, config, seamLockProgress);
+
   // 6. Merge all MaterialZone buffers into one clean non-indexed BufferGeometry with groups
   const totalPositions: number[] = [];
   const totalUvs: number[] = [];
   const geometry = new THREE.BufferGeometry();
 
   let vertexOffset = 0;
-  const zones: MaterialZone[] = [0, 1, 2, 3, 4];
+  const zones: MaterialZone[] = [0, 1, 2, 3, 4, 5];
   for (const zone of zones) {
     const zb = zoneBuffers[zone];
     const count = zb.positions.length / 3;
@@ -1270,6 +1303,93 @@ function computePieceOffsetMm(
   return [0, 0, 0];
 }
 
+function buildPieceInnerLabels(
+  pieceId: string,
+  partCode: string,
+  walls: WallId[],
+  wallRotationsMap: Partial<Record<WallId, Rotation2D[]>>,
+  W: number,
+  H: number,
+  L: number,
+  ribZPositions: number[]
+): BuiltFaceLabel[] {
+  const hw = W / 2;
+  const hh = H / 2;
+  const insetMm = 0.55; // Strictly inside inner face (lòng trong), zero z-fighting, invisible from exterior
+
+  // Choose flat rib-free Z bay near the front opening so labels are crisp & immediately legible
+  let labelZ = 0;
+  let baySpanZ = L;
+  if (ribZPositions.length > 0) {
+    const lastRib = ribZPositions[ribZPositions.length - 1];
+    const frontBay = L / 2 - lastRib;
+    if (frontBay >= 95) {
+      labelZ = lastRib + frontBay * 0.5;
+      baySpanZ = frontBay - 24;
+    } else if (ribZPositions.length >= 2) {
+      const midIdx = Math.floor(ribZPositions.length / 2);
+      labelZ = (ribZPositions[midIdx - 1] + ribZPositions[midIdx]) * 0.5;
+      baySpanZ = ribZPositions[midIdx] - ribZPositions[midIdx - 1] - 24;
+    }
+  } else {
+    baySpanZ = L - 24;
+  }
+
+  return walls.map((wall) => {
+    let baseXY: Vec2;
+    let baseEuler: THREE.Euler;
+    const wallSpan = getWallLength(wall, W, H);
+    switch (wall) {
+      case 'bottom':
+        baseXY = { x: 0, y: -hh + insetMm };
+        baseEuler = new THREE.Euler(-Math.PI / 2, 0, 0, 'XYZ');
+        break;
+      case 'top':
+        baseXY = { x: 0, y: hh - insetMm };
+        baseEuler = new THREE.Euler(Math.PI / 2, 0, 0, 'XYZ');
+        break;
+      case 'left':
+        baseXY = { x: -hw + insetMm, y: 0 };
+        baseEuler = new THREE.Euler(0, Math.PI / 2, 0, 'XYZ');
+        break;
+      case 'right':
+        baseXY = { x: hw - insetMm, y: 0 };
+        baseEuler = new THREE.Euler(0, -Math.PI / 2, 0, 'XYZ');
+        break;
+    }
+
+    const rots = wallRotationsMap[wall];
+    let ptXY = baseXY;
+    let totalRotZ = 0;
+    if (rots && rots.length > 0) {
+      for (const r of rots) {
+        ptXY = rotatePoint2(ptXY, r.pivot, r.angle);
+        totalRotZ += r.angle;
+      }
+    }
+
+    const finalQuat = new THREE.Quaternion()
+      .setFromAxisAngle(new THREE.Vector3(0, 0, 1), totalRotZ)
+      .multiply(new THREE.Quaternion().setFromEuler(baseEuler));
+    const finalEuler = new THREE.Euler().setFromQuaternion(finalQuat, 'XYZ');
+
+    // Size label cleanly proportional to available flat wall span & Z bay
+    const maxW = Math.min(wall === 'top' || wall === 'bottom' ? wallSpan * 0.42 : baySpanZ * 0.68, 175);
+    const maxH = Math.min(wall === 'top' || wall === 'bottom' ? baySpanZ * 0.62 : wallSpan * 0.46, 86);
+    const labelW = Math.max(46, Math.min(maxW, maxH * 2.15));
+    const labelH = Math.max(24, labelW * 0.46);
+
+    return {
+      id: `${pieceId}-lbl-${wall}`,
+      partCode,
+      pieceId,
+      position: [ptXY.x * MM_TO_M, ptXY.y * MM_TO_M, labelZ * MM_TO_M],
+      rotation: [finalEuler.x, finalEuler.y, finalEuler.z],
+      sizeM: [labelW * MM_TO_M, labelH * MM_TO_M],
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Public Assembly Builder
 // ---------------------------------------------------------------------------
@@ -1306,7 +1426,13 @@ export function buildDuctAssembly(
       isSinglePiece
     );
 
-    const geometry = extrudeSheetPolyline(poly, L, t, ribLayout.zPositionsMm);
+    const geometry = extrudeSheetPolyline(
+      poly,
+      topo.walls,
+      config,
+      seamLockProgress,
+      ribLayout.zPositionsMm
+    );
     const edgesGeometry = new THREE.EdgesGeometry(geometry, 22);
     const offsetMm = computePieceOffsetMm(
       topo.id,
@@ -1315,10 +1441,22 @@ export function buildDuctAssembly(
       seamLockProgress,
       explodeRatio
     );
+    const faceLabels = buildPieceInnerLabels(
+      topo.id,
+      topo.partCode,
+      topo.walls,
+      poly.wallRotations,
+      W,
+      H,
+      L,
+      ribLayout.zPositionsMm
+    );
 
     return {
       id: topo.id,
+      partCode: topo.partCode,
       name: topo.name,
+      walls: topo.walls,
       geometry,
       edgesGeometry,
       offset: [
@@ -1326,6 +1464,7 @@ export function buildDuctAssembly(
         offsetMm[1] * MM_TO_M,
         offsetMm[2] * MM_TO_M,
       ],
+      faceLabels,
     };
   });
 
@@ -1346,9 +1485,13 @@ export function buildDuctAssembly(
     }
   }
 
+  // Build detached Stage 2 end accessories (ke góc TDC/TDF, bích V/U rời, khung lưới LCCT, mảnh bịt đầu)
+  const accessories = buildAllEndAccessories(config, seamLockProgress, explodeRatio);
+
   return {
     pieces,
     weldBeads,
+    accessories,
     boundingSizeM: [W * MM_TO_M, H * MM_TO_M, L * MM_TO_M],
   };
 }

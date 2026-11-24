@@ -1,36 +1,63 @@
 import { AlertTriangle, CheckCircle2, Info, Ruler } from 'lucide-react';
 import {
   calculateBlankAnalysis,
-  evaluateSplitRecommendation,
+  evaluateSplitForConfig,
   getSheetStandardWidth,
   SHEET_MATERIAL_LABELS,
   SPLIT_MODE_LABELS,
 } from '../domain/ductRules';
+import { getEndAllowanceLabel, getEndAllowanceMm } from '../domain/endConnectionRules';
 import type { DuctConfig } from '../types/duct';
 
 interface BlankAnalysisTabProps {
   config: DuctConfig;
+  selectedPartCode: string | null;
+  onSelectPart: (partCode: string | null) => void;
 }
 
-export function BlankAnalysisTab({ config }: BlankAnalysisTabProps) {
+export function BlankAnalysisTab({
+  config,
+  selectedPartCode,
+  onSelectPart,
+}: BlankAnalysisTabProps) {
   const pieces = calculateBlankAnalysis(config);
   const sheetWidth = getSheetStandardWidth(config.sheetMaterial);
   const matLabel = SHEET_MATERIAL_LABELS[config.sheetMaterial];
-  const rec = evaluateSplitRecommendation(config.W, config.H, config.L, config.sheetMaterial);
+  const rec = evaluateSplitForConfig(
+    config.W,
+    config.H,
+    config.L,
+    config.sheetMaterial,
+    config.c1,
+    config.c2
+  );
+
+  const c1Allow = getEndAllowanceMm(config.c1);
+  const c2Allow = getEndAllowanceMm(config.c2);
+  const blankLength = config.L + c1Allow + c2Allow;
 
   const totalArea = pieces.reduce((sum, p) => sum + p.areaM2, 0);
   const anyExceeds = pieces.some((p) => p.cutOrientation === 'can_noi_c');
+  const endCapCount = pieces.filter((p) => p.isEndCap).length;
 
   return (
     <div className="space-y-4 pb-5">
-      {/* KPI Summary: Tổng diện tích phôi + Khổ vật liệu chuẩn (1200 / 1250 mm) — KHÔNG hiển thị kg */}
+      {/* KPI Summary: Tổng diện tích phôi + Khổ vật liệu chuẩn (1200 / 1250 mm) — KHÔNG tính kg */}
       <section className="grid grid-cols-2 gap-2">
         <div className="rounded-lg border border-[#232e40] bg-[#151c27] p-2.5">
           <div className="text-[10px] font-medium text-slate-400 uppercase">
             Tổng diện tích phôi
           </div>
-          <div className="mt-0.5 font-mono text-base font-semibold tabular-nums text-sky-300">
+          <div
+            id="kpi-total-area"
+            className="mt-0.5 font-mono text-base font-semibold tabular-nums text-sky-300"
+          >
             {totalArea.toFixed(2)} <span className="text-xs font-normal text-slate-400">m²</span>
+          </div>
+          <div className="mt-0.5 truncate text-[10px] text-slate-400">
+            {endCapCount > 0
+              ? `${pieces.length - endCapCount} thân + ${endCapCount} bịt đầu`
+              : `${pieces.length} mảnh thân ống`}
           </div>
         </div>
         <div
@@ -44,6 +71,35 @@ export function BlankAnalysisTab({ config }: BlankAnalysisTabProps) {
             {sheetWidth} <span className="text-xs font-normal text-slate-400">mm</span>
           </div>
           <div className="mt-0.5 truncate text-[10px] text-slate-400">{matLabel}</div>
+        </div>
+      </section>
+
+      {/* Dynamic Blank Length Breakdown: L_phôi = L + bù C1 + bù C2 */}
+      <section className="rounded-lg border border-[#223044] bg-[#0e1520] p-2.5 text-[11px]">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="font-semibold text-slate-300">Chiều dài phôi tối đa (L phôi)</span>
+          <span
+            id="kpi-blank-length"
+            className={`font-mono text-xs font-bold tabular-nums ${
+              blankLength > sheetWidth ? 'text-amber-300' : 'text-sky-300'
+            }`}
+          >
+            {blankLength} mm
+          </span>
+        </div>
+        <div className="space-y-0.5 text-[10.5px] text-slate-400">
+          <div className="flex justify-between">
+            <span>Chiều dài thân ống (L):</span>
+            <span className="font-mono text-slate-200">{config.L} mm</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Đầu C1 — {getEndAllowanceLabel(config.c1)}:</span>
+            <span className="font-mono text-slate-200">+{c1Allow} mm</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Đầu C2 — {getEndAllowanceLabel(config.c2)}:</span>
+            <span className="font-mono text-slate-200">+{c2Allow} mm</span>
+          </div>
         </div>
       </section>
 
@@ -95,7 +151,7 @@ export function BlankAnalysisTab({ config }: BlankAnalysisTabProps) {
         )}
       </section>
 
-      {/* Per-piece Blank Table */}
+      {/* Per-piece Blank Table with Part Codes (1-A, 1-B, 1-C, 1-D, 1-E...) */}
       <section className="space-y-2 border-t border-[#1e2838] pt-3.5">
         <div className="flex items-center justify-between gap-2">
           <h2 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
@@ -106,61 +162,113 @@ export function BlankAnalysisTab({ config }: BlankAnalysisTabProps) {
         </div>
 
         <div className="space-y-2">
-          {pieces.map((p, idx) => (
-            <div
-              key={p.id}
-              className="rounded-lg border border-[#232e40] bg-[#141b26] p-2.5 text-[11px]"
-            >
-              <div className="mb-1.5 flex items-center justify-between">
-                <div className="font-semibold text-slate-100">
-                  #{idx + 1} {p.name}
-                </div>
-                <span className="rounded bg-[#1e2a3c] px-1.5 py-0.5 font-mono text-[10px] text-sky-300">
-                  {p.bendCount} đường chấn
-                </span>
-              </div>
-
-              <div className="mb-2 flex items-center justify-between rounded bg-[#0d121a] px-2 py-1.5 font-mono">
-                <span className="text-slate-400">Kích thước phôi:</span>
-                <span className="font-semibold text-slate-100">
-                  {p.developedWidth} × {p.blankLength} mm
-                </span>
-              </div>
-
-              <div className="space-y-1 text-[10.5px] text-slate-400">
-                <div className="flex justify-between">
-                  <span>Thân ({p.wallsLabel}):</span>
-                  <span className="font-mono text-slate-200">{p.wallSpanSum} mm</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Mép đầu 1 ({p.startSeamLabel}):</span>
-                  <span className="font-mono text-slate-200">+{p.startAllowance} mm</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Mép đầu 2 ({p.endSeamLabel}):</span>
-                  <span className="font-mono text-slate-200">+{p.endAllowance} mm</span>
-                </div>
-                <div className="flex justify-between border-t border-[#1f2938] pt-1">
-                  <span>Diện tích:</span>
-                  <span className="font-mono font-medium text-sky-300">
-                    {p.areaM2.toFixed(2)} m²
-                  </span>
-                </div>
-              </div>
-
+          {pieces.map((p) => {
+            const isSelected = selectedPartCode === p.partCode;
+            return (
               <div
-                className={`mt-2 rounded px-2 py-1 text-[10px] font-medium ${
-                  p.cutOrientation === 'can_noi_c'
-                    ? 'bg-amber-500/15 text-amber-300'
-                    : p.cutOrientation === 'doc_6000'
-                      ? 'bg-sky-500/15 text-sky-300'
-                      : 'bg-emerald-500/12 text-emerald-300'
+                key={p.id}
+                data-piece-id={p.id}
+                data-part-code={p.partCode}
+                onClick={() => onSelectPart(isSelected ? null : p.partCode)}
+                className={`cursor-pointer rounded-lg border p-2.5 text-[11px] transition-colors ${
+                  isSelected
+                    ? 'border-sky-400 bg-sky-500/12 ring-1 ring-sky-400/40'
+                    : p.isEndCap
+                      ? 'border-sky-500/40 bg-[#131d2c] hover:border-sky-400/60'
+                      : 'border-[#232e40] bg-[#141b26] hover:border-[#344662]'
                 }`}
               >
-                {p.cutNote}
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 font-semibold text-slate-100">
+                    <span className="rounded bg-sky-500/20 px-1.5 py-0.5 font-mono text-[10.5px] font-bold text-sky-300 ring-1 ring-sky-500/35">
+                      {p.partCode}
+                    </span>
+                    <span className="truncate">{p.name}</span>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                      p.isEndCap
+                        ? 'bg-sky-500/20 text-sky-200'
+                        : 'bg-[#1e2a3c] text-sky-300'
+                    }`}
+                  >
+                    {p.bendCount} đường chấn
+                  </span>
+                </div>
+
+                <div className="mb-2 flex items-center justify-between rounded bg-[#0d121a] px-2 py-1.5 font-mono">
+                  <span className="text-slate-400">Kích thước phôi:</span>
+                  <span className="font-semibold text-slate-100">
+                    {p.developedWidth} × {p.blankLength} mm
+                  </span>
+                </div>
+
+                <div className="space-y-1 text-[10.5px] text-slate-400">
+                  {p.isEndCap ? (
+                    <>
+                      <div className="flex justify-between">
+                        <span>Mặt bịt (W × H):</span>
+                        <span className="font-mono text-slate-200">
+                          {config.W} × {config.H} mm
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Trái / Phải:</span>
+                        <span className="font-mono text-slate-200">
+                          +{p.startAllowance} / +{p.endAllowance} mm
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Trên / Dưới:</span>
+                        <span className="font-mono text-slate-200">
+                          +{p.c1Allowance} / +{p.c2Allowance} mm
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex justify-between">
+                        <span>Thân ({p.wallsLabel}):</span>
+                        <span className="font-mono text-slate-200">{p.wallSpanSum} mm</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Mép dọc 1 ({p.startSeamLabel}):</span>
+                        <span className="font-mono text-slate-200">+{p.startAllowance} mm</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Mép dọc 2 ({p.endSeamLabel}):</span>
+                        <span className="font-mono text-slate-200">+{p.endAllowance} mm</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Chiều dài phôi (L + C1 + C2):</span>
+                        <span className="font-mono text-slate-200">
+                          {p.baseLength}+{p.c1Allowance}+{p.c2Allowance} = {p.blankLength} mm
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  <div className="flex justify-between border-t border-[#1f2938] pt-1">
+                    <span>Diện tích:</span>
+                    <span className="font-mono font-medium text-sky-300">
+                      {p.areaM2.toFixed(2)} m²
+                    </span>
+                  </div>
+                </div>
+
+                <div
+                  className={`mt-2 rounded px-2 py-1 text-[10px] font-medium ${
+                    p.cutOrientation === 'can_noi_c'
+                      ? 'bg-amber-500/15 text-amber-300'
+                      : p.cutOrientation === 'doc_6000'
+                        ? 'bg-sky-500/15 text-sky-300'
+                        : 'bg-emerald-500/12 text-emerald-300'
+                  }`}
+                >
+                  {p.cutNote}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
     </div>

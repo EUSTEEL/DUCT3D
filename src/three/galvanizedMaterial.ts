@@ -7,6 +7,14 @@ export interface DuctMaterialSet {
   weldBeadGalvanized: THREE.MeshStandardMaterial;
   weldBeadInox: THREE.MeshStandardMaterial;
   weldBeadTechnical: THREE.MeshStandardMaterial;
+  bracketRealistic: THREE.MeshStandardMaterial;
+  bracketTechnical: THREE.MeshStandardMaterial;
+  structuralFlangeRealistic: THREE.MeshStandardMaterial;
+  structuralFlangeTechnical: THREE.MeshStandardMaterial;
+  lcctFrameRealistic: THREE.MeshStandardMaterial;
+  lcctFrameTechnical: THREE.MeshStandardMaterial;
+  lcctWireMeshRealistic: THREE.MeshStandardMaterial;
+  lcctWireMeshTechnical: THREE.MeshStandardMaterial;
   dispose: () => void;
 }
 
@@ -337,15 +345,41 @@ function createBrushedInoxTextures(size = 512): {
   };
 }
 
+function createWireMeshTexture(size = 128): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, size, size);
+
+  const cells = 4;
+  const step = size / cells;
+
+  // Draw crisp woven metallic wire grid with slight specular center stripe
+  for (let i = 0; i <= cells; i++) {
+    const pos = Math.round(i * step);
+    ctx.fillStyle = 'rgba(186, 200, 214, 0.92)';
+    ctx.fillRect(pos - 2, 0, 4, size);
+    ctx.fillRect(0, pos - 2, size, 4);
+
+    ctx.fillStyle = 'rgba(235, 243, 250, 0.98)';
+    ctx.fillRect(pos - 1, 0, 1.5, size);
+    ctx.fillRect(0, pos - 1, size, 1.5);
+  }
+
+  return configureCanvasTexture(canvas, true);
+}
+
 /**
  * Creates Galvanized Mini-Spangle, Brushed Stainless Inox, and Technical Color Coding material sets
- * matching the 5 MaterialZone indices:
+ * matching the 6 MaterialZone indices:
  * 0 = Body, 1 = Female Pittsburgh (Red), 2 = Male Pittsburgh (Blue),
- * 3 = 90° Bend Line (Green), 4 = Welded Seam (Amber-Orange).
+ * 3 = 90° Bend Line (Green), 4 = Welded Seam (Orange), 5 = End Flange (Yellow).
  */
 export function createDuctMaterialSet(): DuctMaterialSet {
   const galvTex = createMiniSpangleTextures(512);
   const inoxTex = createBrushedInoxTextures(512);
+  const wireMeshTex = createWireMeshTexture(128);
 
   // Polygon offset ensures crisp <Edges> overlay never z-fights against thin sheet faces
   const commonOffset = {
@@ -372,11 +406,12 @@ export function createDuctMaterialSet(): DuctMaterialSet {
   const galvWeldZone = makeGalv('#e3ebf2', 1.0, 0.8);
 
   const galvanizedMaterials: THREE.MeshStandardMaterial[] = [
-    galvMain,
-    galvMain,
-    galvMain,
-    galvMain,
-    galvWeldZone,
+    galvMain, // 0: Body
+    galvMain, // 1: Female seam
+    galvMain, // 2: Male seam
+    galvMain, // 3: Bend line
+    galvWeldZone, // 4: Weld seam
+    galvMain, // 5: Integral end flange (same galvanized sheet!)
   ];
 
   // 2. Inox xước sáng mịn (brushed stainless steel, bright satin finish, no zinc spangle)
@@ -397,14 +432,15 @@ export function createDuctMaterialSet(): DuctMaterialSet {
   const inoxWeldZone = makeInox('#eef3f8', 1.0, 0.76);
 
   const inoxMaterials: THREE.MeshStandardMaterial[] = [
-    inoxMain,
-    inoxMain,
-    inoxMain,
-    inoxMain,
-    inoxWeldZone,
+    inoxMain, // 0: Body
+    inoxMain, // 1: Female seam
+    inoxMain, // 2: Male seam
+    inoxMain, // 3: Bend line
+    inoxWeldZone, // 4: Weld seam
+    inoxMain, // 5: Integral end flange (same brushed Inox!)
   ];
 
-  // 3. Tô màu kỹ thuật
+  // 3. Tô màu kỹ thuật (Đỏ = Mí kép, Xanh dương = Mí đơn, Xanh lá = Đường chấn, Cam = Mí hàn, Vàng = Bích)
   const makeTech = (hex: string, metalness = 0.25, roughness = 0.42) =>
     new THREE.MeshStandardMaterial({
       color: new THREE.Color(hex),
@@ -421,7 +457,8 @@ export function createDuctMaterialSet(): DuctMaterialSet {
     makeTech('#e13f3f', 0.22, 0.36), // 1: Mí kép Female (Đỏ)
     makeTech('#2f7cf6', 0.22, 0.36), // 2: Mí đơn Male (Xanh dương)
     makeTech('#22c55e', 0.20, 0.38), // 3: Đường chấn 90° (Xanh lá)
-    makeTech('#f59e0b', 0.24, 0.36), // 4: Mí hàn (Cam / Hổ phách)
+    makeTech('#f97316', 0.24, 0.36), // 4: Mí hàn (Cam đậm)
+    makeTech('#eab308', 0.24, 0.36), // 5: Bích kết nối (Vàng nổi bật)
   ];
 
   const weldBeadGalvanized = new THREE.MeshStandardMaterial({
@@ -439,10 +476,86 @@ export function createDuctMaterialSet(): DuctMaterialSet {
   });
 
   const weldBeadTechnical = new THREE.MeshStandardMaterial({
-    color: new THREE.Color('#fbbf24'),
+    color: new THREE.Color('#fb923c'),
     metalness: 0.3,
     roughness: 0.35,
     envMapIntensity: 0.9,
+  });
+
+  // Stamped galvanized steel TDC corner brackets & C-cleat bars
+  const bracketRealistic = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#d3dde8'),
+    roughnessMap: inoxTex.roughnessMap,
+    metalness: 0.84,
+    roughness: 0.32,
+    envMapIntensity: 1.35,
+    ...commonOffset,
+  });
+
+  const bracketTechnical = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#facc15'),
+    metalness: 0.28,
+    roughness: 0.35,
+    envMapIntensity: 0.95,
+    ...commonOffset,
+  });
+
+  // Detached structural steel Bích V / Bích U frames (gunmetal zinc-coated structural angle/channel)
+  const structuralFlangeRealistic = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#9aa8b8'),
+    roughnessMap: galvTex.roughnessMap,
+    bumpMap: galvTex.bumpMap,
+    bumpScale: 0.0005,
+    metalness: 0.80,
+    roughness: 0.44,
+    envMapIntensity: 1.18,
+    ...commonOffset,
+  });
+
+  const structuralFlangeTechnical = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#eab308'),
+    metalness: 0.25,
+    roughness: 0.38,
+    envMapIntensity: 0.9,
+    ...commonOffset,
+  });
+
+  // LCCT Screen frame & see-through square wire mesh
+  const lcctFrameRealistic = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#c5d1de'),
+    metalness: 0.82,
+    roughness: 0.34,
+    envMapIntensity: 1.25,
+    ...commonOffset,
+  });
+
+  const lcctFrameTechnical = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#fde047'),
+    metalness: 0.25,
+    roughness: 0.38,
+    envMapIntensity: 0.9,
+    ...commonOffset,
+  });
+
+  const lcctWireMeshRealistic = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#dbe5f0'),
+    map: wireMeshTex,
+    transparent: true,
+    alphaTest: 0.2,
+    metalness: 0.78,
+    roughness: 0.32,
+    side: THREE.DoubleSide,
+    envMapIntensity: 1.3,
+  });
+
+  const lcctWireMeshTechnical = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#fef08a'),
+    map: wireMeshTex,
+    transparent: true,
+    alphaTest: 0.2,
+    metalness: 0.2,
+    roughness: 0.4,
+    side: THREE.DoubleSide,
   });
 
   const dispose = () => {
@@ -452,6 +565,7 @@ export function createDuctMaterialSet(): DuctMaterialSet {
     inoxTex.map.dispose();
     inoxTex.roughnessMap.dispose();
     inoxTex.bumpMap.dispose();
+    wireMeshTex.dispose();
     galvMain.dispose();
     galvWeldZone.dispose();
     inoxMain.dispose();
@@ -460,6 +574,14 @@ export function createDuctMaterialSet(): DuctMaterialSet {
     weldBeadGalvanized.dispose();
     weldBeadInox.dispose();
     weldBeadTechnical.dispose();
+    bracketRealistic.dispose();
+    bracketTechnical.dispose();
+    structuralFlangeRealistic.dispose();
+    structuralFlangeTechnical.dispose();
+    lcctFrameRealistic.dispose();
+    lcctFrameTechnical.dispose();
+    lcctWireMeshRealistic.dispose();
+    lcctWireMeshTechnical.dispose();
   };
 
   return {
@@ -469,6 +591,14 @@ export function createDuctMaterialSet(): DuctMaterialSet {
     weldBeadGalvanized,
     weldBeadInox,
     weldBeadTechnical,
+    bracketRealistic,
+    bracketTechnical,
+    structuralFlangeRealistic,
+    structuralFlangeTechnical,
+    lcctFrameRealistic,
+    lcctFrameTechnical,
+    lcctWireMeshRealistic,
+    lcctWireMeshTechnical,
     dispose,
   };
 }
