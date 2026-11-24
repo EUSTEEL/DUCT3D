@@ -1,17 +1,39 @@
-import { Box, Crosshair, Eye, RotateCcw, Square } from 'lucide-react';
-import { SPLIT_MODE_LABELS } from '../domain/ductRules';
+import { Box, Crosshair, Eye, PanelLeftOpen, RotateCcw, Square } from 'lucide-react';
+import { SHEET_MATERIAL_LABELS, SPLIT_MODE_LABELS } from '../domain/ductRules';
 import type { CameraPreset, DuctConfig } from '../types/duct';
 
 interface ViewportOverlaysProps {
   config: DuctConfig;
+  sidebarOpen: boolean;
+  onExpandSidebar: () => void;
   onCameraPreset: (preset: CameraPreset) => void;
 }
 
-export function ViewportOverlays({ config, onCameraPreset }: ViewportOverlaysProps) {
+export function ViewportOverlays({
+  config,
+  sidebarOpen,
+  onExpandSidebar,
+  onCameraPreset,
+}: ViewportOverlaysProps) {
   const isTech = config.materialMode === 'technical';
+  const matLabel = SHEET_MATERIAL_LABELS[config.sheetMaterial];
 
   return (
     <>
+      {/* Top-Left Floating Expand Button when Left Sidebar is Hidden */}
+      {!sidebarOpen && (
+        <button
+          id="btn-expand-sidebar"
+          type="button"
+          onClick={onExpandSidebar}
+          className="absolute top-3 left-3 z-20 inline-flex items-center gap-1.5 rounded-lg border border-[#2a3950] bg-[#0e141e]/90 px-3 py-1.5 text-xs font-medium text-sky-200 shadow-lg backdrop-blur-md transition-colors hover:border-sky-500/60 hover:bg-[#162030] hover:text-white"
+          title="Mở lại bảng điều khiển bên trái"
+        >
+          <PanelLeftOpen className="h-4 w-4 text-sky-400" />
+          <span>Bảng điều khiển</span>
+        </button>
+      )}
+
       {/* Bottom-Left: Compact Status Pill / Technical Color Legend */}
       <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex flex-col gap-1.5">
         {isTech && (
@@ -40,7 +62,9 @@ export function ViewportOverlays({ config, onCameraPreset }: ViewportOverlaysPro
             {config.W} × {config.H} × L{config.L} mm
           </span>
           <span className="text-slate-600">|</span>
-          <span>t = {config.thickness} mm</span>
+          <span className="font-sans text-slate-200">
+            {matLabel} <span className="font-mono">{config.thickness}</span> mm
+          </span>
           <span className="text-slate-600">|</span>
           <span className="font-sans text-slate-300">{SPLIT_MODE_LABELS[config.splitMode]}</span>
           <span className="text-slate-600">|</span>

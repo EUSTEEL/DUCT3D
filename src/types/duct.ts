@@ -1,7 +1,18 @@
-export type SheetThickness = 0.58 | 0.75 | 0.95 | 1.15 | 1.2 | 1.5;
+export type SheetMaterialType = 'galvanized' | 'inox';
+
+export type GalvanizedThickness = 0.58 | 0.75 | 0.95 | 1.15 | 1.2 | 1.5;
+export type InoxThickness = 0.6 | 0.8 | 1.0;
+export type SheetThickness = GalvanizedThickness | InoxThickness;
+
+export const GALVANIZED_THICKNESSES: readonly GalvanizedThickness[] = [
+  0.58, 0.75, 0.95, 1.15, 1.2, 1.5,
+] as const;
+
+export const INOX_THICKNESSES: readonly InoxThickness[] = [0.6, 0.8, 1.0] as const;
 
 export const SHEET_THICKNESSES: readonly SheetThickness[] = [
-  0.58, 0.75, 0.95, 1.15, 1.2, 1.5,
+  ...GALVANIZED_THICKNESSES,
+  ...INOX_THICKNESSES,
 ] as const;
 
 export type SplitMode = '1_piece' | '2_piece_L' | '2_piece_UI' | '4_piece';
@@ -10,7 +21,12 @@ export type SeamType = 'pittsburgh' | 'weld_overlap' | 'weld_butt';
 
 export type SeamState = 'unseamed' | 'seamed';
 
-export type MaterialMode = 'galvanized' | 'technical';
+/**
+ * Viewport shading mode:
+ * - 'realistic': renders the selected sheetMaterial ('galvanized' mini-spangle or 'inox' brushed stainless)
+ * - 'technical': renders color-coded engineering zones (Red Female, Blue Male, Green Bend, Amber Weld)
+ */
+export type MaterialMode = 'realistic' | 'technical';
 
 export type WallId = 'bottom' | 'right' | 'top' | 'left';
 
@@ -33,6 +49,7 @@ export interface DuctConfig {
   W: number; // Width (mm)
   H: number; // Height / Depth (mm)
   L: number; // Length (mm)
+  sheetMaterial: SheetMaterialType; // 'galvanized' (1200mm) | 'inox' (1250mm)
   thickness: SheetThickness; // mm
   autoSplit: boolean;
   splitMode: SplitMode;
@@ -43,7 +60,7 @@ export interface DuctConfig {
   seamState: SeamState; // Chưa gò mí ↔ Đã gò mí
   explode: number; // 0 to 100 (%)
   stiffenerRibs: boolean; // Gân tăng cứng thẳng
-  materialMode: MaterialMode; // Tôn Mạ Kẽm ↔ Tô màu kỹ thuật
+  materialMode: MaterialMode; // Vật liệu thật (Tôn Mạ Kẽm / Inox) ↔ Tô màu kỹ thuật
 }
 
 export interface ResolvedCornerSeam {
@@ -61,8 +78,9 @@ export interface SplitRecommendation {
   reason: string;
   perimeter: number;
   halfPerimeter: number;
+  sheetStandardWidth: number;
   rotateLongitudinal: boolean;
-  exceedsSheet1200: boolean;
+  exceedsSheetWidth: boolean;
 }
 
 export interface PieceBlankInfo {
@@ -79,8 +97,7 @@ export interface PieceBlankInfo {
   blankLength: number; // mm (along L)
   bendCount: number; // number of 90° body bends
   areaM2: number; // m²
-  weightKg: number; // kg
-  cutOrientation: 'ngang_1200' | 'doc_6000x1200' | 'can_noi_c';
+  cutOrientation: 'ngang_chuan' | 'doc_6000' | 'can_noi_c';
   cutNote: string;
 }
 

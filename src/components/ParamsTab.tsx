@@ -13,22 +13,26 @@ import {
   computeRibLayout,
   DUCT_PRESETS,
   evaluateSplitRecommendation,
+  getAllowedThicknesses,
+  getSheetStandardWidth,
   resolveActiveSeams,
+  SHEET_MATERIAL_LABELS,
   WALL_LABELS,
 } from '../domain/ductRules';
 import type {
   CornerId,
   DuctConfig,
   SeamType,
+  SheetMaterialType,
   SheetThickness,
   SplitMode,
 } from '../types/duct';
-import { SHEET_THICKNESSES } from '../types/duct';
 
 interface ParamsTabProps {
   config: DuctConfig;
   onChange: (patch: Partial<DuctConfig>) => void;
   onDimensionChange: (dim: 'W' | 'H' | 'L', value: number) => void;
+  onSheetMaterialChange: (material: SheetMaterialType) => void;
   onSelectSplitMode: (mode: SplitMode) => void;
   onToggleAutoSplit: () => void;
   onSwapSeams: () => void;
@@ -38,6 +42,8 @@ interface ParamsTabProps {
   ) => void;
   onResetCornerOverrides: () => void;
 }
+
+const STEP_PRESETS = [10, 50, 100] as const;
 
 function SplitSchematicIcon({ mode, active }: { mode: SplitMode; active: boolean }) {
   const stroke = active ? '#38bdf8' : '#7b8da6';
@@ -130,8 +136,29 @@ interface DimInputProps {
   onChange: (v: number) => void;
 }
 
+/**
+ * Smooth keyboard-friendly numeric input:
+ * Uses nullable string draft (`null` when idle) so users can select, clear completely,
+ * and type freely; normalizes to [min, max] and updates the 3D model on Enter or onBlur.
+ */
 function DimInput({ id, label, code, value, min, max, step, onChange }: DimInputProps) {
+  const [draft, setDraft] = useState<string | null>(null);
+
   const clamp = (v: number) => Math.max(min, Math.min(max, Math.round(v)));
+
+  const commitDraft = (raw: string | null) => {
+    setDraft(null);
+    if (raw === null) return;
+    const trimmed = raw.trim();
+    if (trimmed === '') return;
+    const parsed = Number(trimmed);
+    if (Number.isNaN(parsed)) return;
+    const next = clamp(parsed);
+    if (next !== value) {
+      onChange(next);
+    }
+  };
+
   return (
     <div className="rounded-lg border border-[#232e40] bg-[#151c27] p-2">
       <div className="mb-1 flex items-center justify-between">
@@ -142,32 +169,62 @@ function DimInput({ id, label, code, value, min, max, step, onChange }: DimInput
       </div>
       <input
         id={id}
-        type="number"
-        min={min}
-        max={max}
-        value={value}
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
+        value={draft ?? String(value)}
+        onFocus={(e) => {
+          setDraft(String(value));
+          e.currentTarget.select();
+        }}
         onChange={(e) => {
-          const parsed = Number(e.target.value);
-          if (!Number.isNaN(parsed)) {
-            onChange(clamp(parsed));
+          const clean = e.target.value.replace(/[^\d]/g, '');
+          setDraft(clean);
+        }}
+        onBlur={() => commitDraft(draft)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            commitDraft(draft);
+            e.currentTarget.blur();
+          } else if (e.key === 'Escape') {
+            setDraft(null);
+            e.currentTarget.blur();
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            const next = clamp(value + step);
+            setDraft(String(next));
+            onChange(next);
+          } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            const next = clamp(value - step);
+            setDraft(String(next));
+            onChange(next);
           }
         }}
-        className="no-spinner mb-1.5 w-full rounded bg-[#0d121a] px-1.5 py-1 text-center font-mono text-sm font-semibold tabular-nums text-slate-100 ring-1 ring-[#202b3c] outline-none focus:ring-sky-500/60"
+        className="mb-1.5 w-full rounded bg-[#0d121a] px-1.5 py-1 text-center font-mono text-sm font-semibold tabular-nums text-slate-100 ring-1 ring-[#202b3c] outline-none focus:ring-sky-500/70"
       />
       <div className="grid grid-cols-2 gap-1">
         <button
+          id={`btn-dec-${code}`}
           type="button"
-          onClick={() => onChange(clamp(value - step))}
+          onClick={() => {
+            setDraft(null);
+            onChange(clamp(value - step));
+          }}
           className="flex h-5 items-center justify-center rounded bg-[#1d2736] text-xs font-semibold text-slate-300 transition-colors hover:bg-[#273549] hover:text-white"
-          aria-label={`Giảm ${label}`}
+          aria-label={`Giảm ${label} ${step} mm`}
         >
           −
         </button>
         <button
+          id={`btn-inc-${code}`}
           type="button"
-          onClick={() => onChange(clamp(value + step))}
+          onClick={() => {
+            setDraft(null);
+            onChange(clamp(value + step));
+          }}
           className="flex h-5 items-center justify-center rounded bg-[#1d2736] text-xs font-semibold text-slate-300 transition-colors hover:bg-[#273549] hover:text-white"
-          aria-label={`Tăng ${label}`}
+          aria-label={`Tăng ${label} ${step} mm`}
         >
           +
         </button>
@@ -180,6 +237,7 @@ export function ParamsTab({
   config,
   onChange,
   onDimensionChange,
+  onSheetMaterialChange,
   onSelectSplitMode,
   onToggleAutoSplit,
   onSwapSeams,
@@ -187,8 +245,21 @@ export function ParamsTab({
   onResetCornerOverrides,
 }: ParamsTabProps) {
   const [showCornerSeamEditor, setShowCornerSeamEditor] = useState(false);
+  const [dimStep, setDimStep] = useState<number>(50);
+  const [stepDraft, setStepDraft] = useState<string | null>(null);
 
-  const rec = evaluateSplitRecommendation(config.W, config.H, config.L);
+  const commitStepDraft = (raw: string | null) => {
+    setStepDraft(null);
+    if (raw === null) return;
+    const trimmed = raw.trim();
+    const parsed = Number(trimmed);
+    if (!trimmed || Number.isNaN(parsed) || parsed < 1) return;
+    setDimStep(Math.max(1, Math.min(500, Math.round(parsed))));
+  };
+
+  const sheetWidth = getSheetStandardWidth(config.sheetMaterial);
+  const allowedThicknesses = getAllowedThicknesses(config.sheetMaterial);
+  const rec = evaluateSplitRecommendation(config.W, config.H, config.L, config.sheetMaterial);
   const activeSeams = resolveActiveSeams(config);
   const ribLayout = computeRibLayout(config.L, config.stiffenerRibs);
   const hasAnyOverride = activeSeams.some((s) => s.isOverridden);
@@ -227,6 +298,7 @@ export function ParamsTab({
               config.W === preset.W &&
               config.H === preset.H &&
               config.L === preset.L &&
+              config.sheetMaterial === preset.sheetMaterial &&
               config.thickness === preset.thickness;
             return (
               <button
@@ -234,11 +306,17 @@ export function ParamsTab({
                 id={`preset-${preset.id}`}
                 type="button"
                 onClick={() => {
-                  const nextRec = evaluateSplitRecommendation(preset.W, preset.H, preset.L);
+                  const nextRec = evaluateSplitRecommendation(
+                    preset.W,
+                    preset.H,
+                    preset.L,
+                    preset.sheetMaterial
+                  );
                   onChange({
                     W: preset.W,
                     H: preset.H,
                     L: preset.L,
+                    sheetMaterial: preset.sheetMaterial,
                     thickness: preset.thickness,
                     autoSplit: true,
                     splitMode: nextRec.recommended,
@@ -261,15 +339,63 @@ export function ParamsTab({
         </div>
       </section>
 
-      {/* Dimensions W, H, L */}
+      {/* Dimensions W, H, L + Step Selector */}
       <section className="space-y-2.5 border-t border-[#1e2838] pt-3.5">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-1.5">
           <h2 className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
-            Kích thước ống thẳng (mm)
+            Kích thước (mm)
           </h2>
-          <span className="font-mono text-[11px] text-slate-400">
-            CV: <strong className="text-slate-200">{rec.perimeter.toLocaleString('vi-VN')}</strong>
-          </span>
+
+          {/* Step Selector: Bước: 10 | 50 | 100 + custom */}
+          <div className="flex items-center gap-1" role="group" aria-label="Bước nhảy kích thước">
+            <span className="text-[10px] text-slate-400">Bước:</span>
+            {STEP_PRESETS.map((st) => {
+              const active = dimStep === st;
+              return (
+                <button
+                  key={st}
+                  id={`btn-step-${st}`}
+                  type="button"
+                  onClick={() => {
+                    setDimStep(st);
+                    setStepDraft(null);
+                  }}
+                  className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold transition-colors ${
+                    active
+                      ? 'bg-sky-500/25 text-sky-200 ring-1 ring-sky-500/50'
+                      : 'bg-[#151c27] text-slate-400 hover:bg-[#1e2838] hover:text-slate-200'
+                  }`}
+                >
+                  {st}
+                </button>
+              );
+            })}
+            <input
+              id="input-custom-step"
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              title="Nhập bước nhảy tùy chỉnh (mm)"
+              aria-label="Bước nhảy tùy chỉnh (mm)"
+              value={stepDraft ?? String(dimStep)}
+              onFocus={(e) => {
+                setStepDraft(String(dimStep));
+                e.currentTarget.select();
+              }}
+              onChange={(e) => setStepDraft(e.target.value.replace(/[^\d]/g, ''))}
+              onBlur={() => commitStepDraft(stepDraft)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  commitStepDraft(stepDraft);
+                  e.currentTarget.blur();
+                } else if (e.key === 'Escape') {
+                  setStepDraft(null);
+                  e.currentTarget.blur();
+                }
+              }}
+              className="w-9 rounded border border-[#243043] bg-[#0d121a] px-1 py-0.5 text-center font-mono text-[10px] font-semibold tabular-nums text-sky-300 outline-none focus:border-sky-500/70"
+            />
+          </div>
         </div>
 
         <div className="grid grid-cols-3 gap-2">
@@ -280,7 +406,7 @@ export function ParamsTab({
             value={config.W}
             min={100}
             max={3000}
-            step={50}
+            step={dimStep}
             onChange={(v) => onDimensionChange('W', v)}
           />
           <DimInput
@@ -290,7 +416,7 @@ export function ParamsTab({
             value={config.H}
             min={100}
             max={3000}
-            step={50}
+            step={dimStep}
             onChange={(v) => onDimensionChange('H', v)}
           />
           <DimInput
@@ -300,7 +426,7 @@ export function ParamsTab({
             value={config.L}
             min={40}
             max={3000}
-            step={50}
+            step={dimStep}
             onChange={(v) => onDimensionChange('L', v)}
           />
         </div>
@@ -330,19 +456,71 @@ export function ParamsTab({
         </div>
       </section>
 
+      {/* Sheet Material Selector: Tôn Mạ Kẽm (1200mm) vs Inox (1250mm) */}
+      <section className="space-y-2 border-t border-[#1e2838] pt-3.5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
+            Vật liệu chế tạo
+          </h2>
+          <span className="font-mono text-[11px] font-semibold text-sky-300">
+            Khổ {sheetWidth} mm
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-1.5" role="group" aria-label="Chọn vật liệu chế tạo">
+          {(
+            [
+              {
+                id: 'galvanized',
+                title: SHEET_MATERIAL_LABELS.galvanized,
+                sub: 'Hoa nhỏ • Khổ 1200 mm',
+              },
+              {
+                id: 'inox',
+                title: SHEET_MATERIAL_LABELS.inox,
+                sub: 'Xước mịn • Khổ 1250 mm',
+              },
+            ] as const
+          ).map((mat) => {
+            const active = config.sheetMaterial === mat.id;
+            return (
+              <button
+                key={mat.id}
+                id={`btn-sheet-mat-${mat.id}`}
+                type="button"
+                onClick={() => onSheetMaterialChange(mat.id)}
+                className={`rounded-lg border px-2.5 py-2 text-left transition-colors ${
+                  active
+                    ? 'border-sky-500/60 bg-sky-500/15 text-slate-100'
+                    : 'border-[#232e40] bg-[#151c27] text-slate-300 hover:border-[#344662] hover:bg-[#1a2332]'
+                }`}
+              >
+                <div className="text-xs font-semibold leading-tight">{mat.title}</div>
+                <div className="mt-0.5 text-[10px] text-slate-400">{mat.sub}</div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
       {/* Sheet Thickness */}
       <section className="space-y-2 border-t border-[#1e2838] pt-3.5">
         <div className="flex items-center justify-between">
           <h2 className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
-            Độ dày tôn (t)
+            Độ dày {config.sheetMaterial === 'inox' ? 'Inox' : 'tôn'} (t)
           </h2>
           <span className="font-mono text-xs font-semibold text-sky-300">
-            {config.thickness.toFixed(2).replace(/0$/, '')} mm
+            {config.thickness.toFixed(2).replace(/\.?0+$/, (m) => (m.startsWith('.') ? '.0' : ''))} mm
           </span>
         </div>
-        <div className="grid grid-cols-6 gap-1">
-          {SHEET_THICKNESSES.map((th: SheetThickness) => {
+        <div
+          className={`grid gap-1.5 ${
+            allowedThicknesses.length === 3 ? 'grid-cols-3' : 'grid-cols-6'
+          }`}
+        >
+          {allowedThicknesses.map((th: SheetThickness) => {
             const active = config.thickness === th;
+            const label = th === 1 ? '1.0' : String(th);
             return (
               <button
                 key={th}
@@ -355,12 +533,12 @@ export function ParamsTab({
                     : 'border-[#232e40] bg-[#151c27] text-slate-400 hover:border-[#334560] hover:text-slate-200'
                 }`}
               >
-                {th}
+                {label}
               </button>
             );
           })}
         </div>
-        {config.thickness === 1.5 && (
+        {config.sheetMaterial === 'galvanized' && config.thickness === 1.5 && (
           <p className="flex items-start gap-1.5 text-[11px] leading-snug text-slate-400">
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-400" />
             <span>Tôn 1.5 mm vẫn chạy Mí gò Pittsburgh bình thường hoặc đổi sang Mí hàn tùy chọn.</span>
@@ -370,15 +548,15 @@ export function ParamsTab({
 
       {/* Piece Splitting */}
       <section className="space-y-2.5 border-t border-[#1e2838] pt-3.5">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <h2 className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
-            Chia mảnh (Khổ tôn 1200mm)
+            Chia mảnh (Khổ {sheetWidth}mm)
           </h2>
           <button
             id="btn-auto-split"
             type="button"
             onClick={onToggleAutoSplit}
-            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors ${
+            className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors ${
               config.autoSplit
                 ? 'bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/40'
                 : 'bg-[#1a2230] text-slate-400 hover:text-slate-200'
@@ -587,13 +765,13 @@ export function ParamsTab({
 
                   <div className="mb-1.5 flex items-center gap-2 text-[10px] text-slate-400">
                     <span>
-                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500 mr-1" />
+                      <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
                       {seam.seamType === 'pittsburgh' ? 'Mí kép' : 'Tấm đè'}:{' '}
                       <strong className="text-slate-200">{WALL_LABELS[seam.femaleWall]}</strong>
                     </span>
                     <span>•</span>
                     <span>
-                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 mr-1" />
+                      <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-blue-500" />
                       {seam.seamType === 'pittsburgh' ? 'Mí đơn' : 'Tấm nhận'}:{' '}
                       <strong className="text-slate-200">{WALL_LABELS[seam.maleWall]}</strong>
                     </span>

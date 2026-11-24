@@ -2,7 +2,8 @@ import { AlertTriangle, CheckCircle2, Info, Ruler } from 'lucide-react';
 import {
   calculateBlankAnalysis,
   evaluateSplitRecommendation,
-  SHEET_STANDARD_WIDTH,
+  getSheetStandardWidth,
+  SHEET_MATERIAL_LABELS,
   SPLIT_MODE_LABELS,
 } from '../domain/ductRules';
 import type { DuctConfig } from '../types/duct';
@@ -13,34 +14,43 @@ interface BlankAnalysisTabProps {
 
 export function BlankAnalysisTab({ config }: BlankAnalysisTabProps) {
   const pieces = calculateBlankAnalysis(config);
-  const rec = evaluateSplitRecommendation(config.W, config.H, config.L);
+  const sheetWidth = getSheetStandardWidth(config.sheetMaterial);
+  const matLabel = SHEET_MATERIAL_LABELS[config.sheetMaterial];
+  const rec = evaluateSplitRecommendation(config.W, config.H, config.L, config.sheetMaterial);
 
   const totalArea = pieces.reduce((sum, p) => sum + p.areaM2, 0);
-  const totalWeight = pieces.reduce((sum, p) => sum + p.weightKg, 0);
   const anyExceeds = pieces.some((p) => p.cutOrientation === 'can_noi_c');
 
   return (
     <div className="space-y-4 pb-5">
-      {/* KPI Summary */}
+      {/* KPI Summary: Tổng diện tích phôi + Khổ vật liệu chuẩn (1200 / 1250 mm) — KHÔNG hiển thị kg */}
       <section className="grid grid-cols-2 gap-2">
         <div className="rounded-lg border border-[#232e40] bg-[#151c27] p-2.5">
-          <div className="text-[10px] font-medium text-slate-400 uppercase">Tổng diện tích phôi</div>
+          <div className="text-[10px] font-medium text-slate-400 uppercase">
+            Tổng diện tích phôi
+          </div>
           <div className="mt-0.5 font-mono text-base font-semibold tabular-nums text-sky-300">
             {totalArea.toFixed(2)} <span className="text-xs font-normal text-slate-400">m²</span>
           </div>
         </div>
-        <div className="rounded-lg border border-[#232e40] bg-[#151c27] p-2.5">
-          <div className="text-[10px] font-medium text-slate-400 uppercase">Khối lượng tôn ước tính</div>
-          <div className="mt-0.5 font-mono text-base font-semibold tabular-nums text-slate-100">
-            {totalWeight.toFixed(2)} <span className="text-xs font-normal text-slate-400">kg</span>
+        <div
+          id="kpi-sheet-width"
+          className="rounded-lg border border-[#232e40] bg-[#151c27] p-2.5"
+        >
+          <div className="text-[10px] font-medium text-slate-400 uppercase">
+            Khổ vật liệu chuẩn
           </div>
+          <div className="mt-0.5 font-mono text-base font-semibold tabular-nums text-slate-100">
+            {sheetWidth} <span className="text-xs font-normal text-slate-400">mm</span>
+          </div>
+          <div className="mt-0.5 truncate text-[10px] text-slate-400">{matLabel}</div>
         </div>
       </section>
 
       {/* Sheet Standard Status */}
       <section className="space-y-2">
         <h2 className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
-          Kiểm tra quy chuẩn khổ tôn {SHEET_STANDARD_WIDTH} mm
+          Kiểm tra quy chuẩn khổ {sheetWidth} mm
         </h2>
         <div
           className={`rounded-lg border p-2.5 text-[11px] leading-relaxed ${
@@ -58,8 +68,8 @@ export function BlankAnalysisTab({ config }: BlankAnalysisTabProps) {
             <div>
               <div className="font-semibold">
                 {anyExceeds
-                  ? 'Có mảnh vượt khổ tôn chuẩn 1200 mm'
-                  : `Tất cả ${pieces.length} mảnh tối ưu trên tấm 6000 × 1200 mm`}
+                  ? `Có mảnh vượt khổ vật liệu chuẩn ${sheetWidth} mm`
+                  : `Tất cả ${pieces.length} mảnh tối ưu trên tấm 6000 × ${sheetWidth} mm`}
               </div>
               <div className="mt-0.5 text-slate-300">
                 Kiểu chia hiện tại: <strong>{SPLIT_MODE_LABELS[config.splitMode]}</strong>
@@ -131,9 +141,9 @@ export function BlankAnalysisTab({ config }: BlankAnalysisTabProps) {
                   <span className="font-mono text-slate-200">+{p.endAllowance} mm</span>
                 </div>
                 <div className="flex justify-between border-t border-[#1f2938] pt-1">
-                  <span>Diện tích / Khối lượng:</span>
-                  <span className="font-mono text-slate-200">
-                    {p.areaM2.toFixed(2)} m² • {p.weightKg.toFixed(2)} kg
+                  <span>Diện tích:</span>
+                  <span className="font-mono font-medium text-sky-300">
+                    {p.areaM2.toFixed(2)} m²
                   </span>
                 </div>
               </div>
@@ -142,7 +152,7 @@ export function BlankAnalysisTab({ config }: BlankAnalysisTabProps) {
                 className={`mt-2 rounded px-2 py-1 text-[10px] font-medium ${
                   p.cutOrientation === 'can_noi_c'
                     ? 'bg-amber-500/15 text-amber-300'
-                    : p.cutOrientation === 'doc_6000x1200'
+                    : p.cutOrientation === 'doc_6000'
                       ? 'bg-sky-500/15 text-sky-300'
                       : 'bg-emerald-500/12 text-emerald-300'
                 }`}

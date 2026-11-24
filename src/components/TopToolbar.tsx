@@ -7,6 +7,7 @@ import {
   Sparkles,
   Wrench,
 } from 'lucide-react';
+import { SHEET_MATERIAL_LABELS } from '../domain/ductRules';
 import type { DuctConfig } from '../types/duct';
 
 interface TopToolbarProps {
@@ -16,38 +17,39 @@ interface TopToolbarProps {
 }
 
 export function TopToolbar({ config, onChange, onSwapSeams }: TopToolbarProps) {
-  const isGalv = config.materialMode === 'galvanized';
+  const isRealistic = config.materialMode === 'realistic';
   const isSeamed = config.seamState === 'seamed';
+  const materialLabel = SHEET_MATERIAL_LABELS[config.sheetMaterial];
 
   return (
     <header className="flex flex-wrap items-center justify-between gap-2 border-b border-[#222d3d] bg-[#11161f]/95 px-3 py-1.5 backdrop-blur-sm">
       {/* Left group: Material mode + Seam state */}
       <div className="flex flex-wrap items-center gap-2">
-        {/* Material Mode Switch */}
+        {/* Material Mode Switch (syncs dynamically with Tôn Mạ Kẽm / Inox) */}
         <div
           className="inline-flex items-center rounded-lg border border-[#243043] bg-[#0c1119] p-0.5"
           role="group"
           aria-label="Chế độ vật liệu"
         >
           <button
-            id="btn-mat-galvanized"
+            id="btn-mat-realistic"
             type="button"
-            onClick={() => onChange({ materialMode: 'galvanized' })}
+            onClick={() => onChange({ materialMode: 'realistic' })}
             className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium whitespace-nowrap transition-colors ${
-              isGalv
+              isRealistic
                 ? 'bg-[#223044] text-sky-200 shadow-xs'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Sparkles className="h-3.5 w-3.5 shrink-0" />
-            <span>Tôn Mạ Kẽm</span>
+            <span>{materialLabel}</span>
           </button>
           <button
             id="btn-mat-technical"
             type="button"
             onClick={() => onChange({ materialMode: 'technical' })}
             className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium whitespace-nowrap transition-colors ${
-              !isGalv
+              !isRealistic
                 ? 'bg-[#223044] text-sky-200 shadow-xs'
                 : 'text-slate-400 hover:text-slate-200'
             }`}

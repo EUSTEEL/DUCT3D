@@ -1,5 +1,12 @@
-import { FileSpreadsheet, FileText, SlidersHorizontal } from 'lucide-react';
-import type { CornerId, DuctConfig, SeamType, SidebarTab, SplitMode } from '../types/duct';
+import { FileSpreadsheet, FileText, PanelLeftClose, SlidersHorizontal } from 'lucide-react';
+import type {
+  CornerId,
+  DuctConfig,
+  SeamType,
+  SheetMaterialType,
+  SidebarTab,
+  SplitMode,
+} from '../types/duct';
 import { BlankAnalysisTab } from './BlankAnalysisTab';
 import { LsxTab } from './LsxTab';
 import { ParamsTab } from './ParamsTab';
@@ -7,9 +14,11 @@ import { ParamsTab } from './ParamsTab';
 interface LeftSidebarProps {
   activeTab: SidebarTab;
   onSelectTab: (tab: SidebarTab) => void;
+  onCollapse: () => void;
   config: DuctConfig;
   onChange: (patch: Partial<DuctConfig>) => void;
   onDimensionChange: (dim: 'W' | 'H' | 'L', value: number) => void;
+  onSheetMaterialChange: (material: SheetMaterialType) => void;
   onSelectSplitMode: (mode: SplitMode) => void;
   onToggleAutoSplit: () => void;
   onSwapSeams: () => void;
@@ -23,9 +32,11 @@ interface LeftSidebarProps {
 export function LeftSidebar({
   activeTab,
   onSelectTab,
+  onCollapse,
   config,
   onChange,
   onDimensionChange,
+  onSheetMaterialChange,
   onSelectSplitMode,
   onToggleAutoSplit,
   onSwapSeams,
@@ -35,12 +46,12 @@ export function LeftSidebar({
   const tabs: { id: SidebarTab; label: string; icon: typeof SlidersHorizontal }[] = [
     { id: 'params', label: 'Thông số', icon: SlidersHorizontal },
     { id: 'lsx', label: 'Nhập LSX', icon: FileText },
-    { id: 'blank', label: 'Phôi 1200', icon: FileSpreadsheet },
+    { id: 'blank', label: 'S Phôi', icon: FileSpreadsheet },
   ];
 
   return (
     <aside className="flex h-full w-full shrink-0 flex-col border-r border-[#222d3d] bg-[#11161f] md:w-[340px]">
-      {/* Brand Header */}
+      {/* Brand Header + Collapse Sidebar Button */}
       <div className="flex items-center justify-between border-b border-[#202b3b] px-4 py-3">
         <div>
           <div className="flex items-center gap-2">
@@ -55,12 +66,25 @@ export function LeftSidebar({
             Mô phỏng 3D Cấu tạo Ống gió Thẳng
           </p>
         </div>
-        <span className="rounded bg-[#1a2433] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-400">
-          M1.1
-        </span>
+
+        <div className="flex items-center gap-1.5">
+          <span className="rounded bg-[#1a2433] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-400">
+            M1.1
+          </span>
+          <button
+            id="btn-collapse-sidebar"
+            type="button"
+            onClick={onCollapse}
+            title="Thu gọn bảng điều khiển để xem 3D toàn màn hình"
+            aria-label="Thu gọn bảng điều khiển"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#243043] bg-[#161e2b] text-slate-400 transition-colors hover:border-sky-500/45 hover:bg-[#1d283a] hover:text-sky-200"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
-      {/* 3-Tab Navigation */}
+      {/* 3-Tab Navigation: Thông số | Nhập LSX | S Phôi */}
       <nav
         className="grid grid-cols-3 border-b border-[#202b3b] bg-[#0e131b] p-1"
         aria-label="Danh mục cấu hình"
@@ -94,6 +118,7 @@ export function LeftSidebar({
             config={config}
             onChange={onChange}
             onDimensionChange={onDimensionChange}
+            onSheetMaterialChange={onSheetMaterialChange}
             onSelectSplitMode={onSelectSplitMode}
             onToggleAutoSplit={onToggleAutoSplit}
             onSwapSeams={onSwapSeams}

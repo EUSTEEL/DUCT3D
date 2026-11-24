@@ -5,21 +5,22 @@
 - **Công nghệ:** React + Vite + TypeScript + Tailwind CSS + Three.js (`@react-three/fiber`, `@react-three/drei`). Chạy 100% phía trình duyệt (client-side), không cần backend, có thể build tĩnh đẩy lên GitHub Pages.
 - **Ngôn ngữ giao diện:** 100% Tiếng Việt chuyên ngành cơ khí ống gió.
 - **Bố cục màn hình:**
-  - **Cột trái (340px):** 3 Tab:
-    1. `Thông số & Cấu tạo` (kích thước, độ dày, chia mảnh, chọn loại mí & đảo mí, đầu kết nối C1/C2, phụ kiện trổ lỗ, tiêu âm).
-    2. `Nhập từ LSX` (dán text LSX, dán JSON, ghim ảnh bản vẽ tham chiếu `Ctrl+V`).
-    3. `Phân tích phôi 1200mm` (bảng kích thước phôi từng mảnh, cảnh báo quy chuẩn).
-  - **Vùng chính giữa (3D/2D Viewport):** Chuyển đổi giữa **Xem 3D Thành phẩm**, **Tách mảnh 3D (Exploded View)** và **Trải phẳng phôi 2D (SVG có kích thước, đường chấn, vết khấu V, ký hiệu mặt đánh dấu)**.
+  - **Cột trái (340px, hỗ trợ nút ẩn/hiện để xem 3D toàn màn hình 100%):** 3 Tab:
+    1. `Thông số` (kích thước W/H/L kèm chọn bước nhảy `10 / 50 / 100 mm` hoặc nhập tay, chọn vật liệu `Tôn Mạ Kẽm / Inox`, độ dày, chia mảnh theo khổ vật liệu chuẩn, chọn loại mí & đảo mí, đầu kết nối C1/C2, phụ kiện trổ lỗ, tiêu âm).
+    2. `Nhập LSX` (dán text LSX, dán JSON, ghim ảnh bản vẽ tham chiếu `Ctrl+V`).
+    3. `S Phôi` (tổng diện tích phôi `m²`, khổ vật liệu chuẩn `1200 / 1250 mm`, bảng kích thước & diện tích `m²` từng mảnh, cảnh báo lọt khổ — **không hiển thị khối lượng kg**).
+  - **Vùng chính giữa (3D/2D Viewport):** Chuyển đổi giữa **Xem 3D Thành phẩm**, **Tách mảnh 3D (Exploded View)** và **Trải phẳng phôi 2D (SVG có kích thước, đường chấn, vết khấu V, ký hiệu mặt đánh dấu)**. Khi thu gọn cột trái, viewport tự động mở rộng 100% kèm nút nổi góc trên-trái để mở lại bảng điều khiển.
   - **Thanh công cụ nhanh phía trên Viewport:**
-    - Chế độ vật liệu: `Tôn Mạ Kẽm` ↔ `Tô màu kỹ thuật (Đỏ = Mí kép, Xanh dương = Mí đơn, Vàng = Bích, Xanh lá = Đường chấn)`.
+    - Chế độ vật liệu: `Tôn Mạ Kẽm` / `Inox` (tự động đồng bộ theo vật liệu đang chọn) ↔ `Tô màu kỹ thuật (Đỏ = Mí kép, Xanh dương = Mí đơn, Vàng = Bích, Xanh lá = Đường chấn)`.
     - Thanh trượt `Tách mảnh (0% → 100%)`.
     - Công tắc trạng thái mí: `Chưa gò mí (vừa chạy máy)` ↔ `Đã gò mí hoàn thiện`.
     - Công tắc bật/tắt `Gân tăng cứng` (1 dạng gân thẳng duy nhất).
     - Nút `Đảo mí kép ↔ mí đơn` tự do.
 
 ## 2. Yêu cầu Đồ họa 3D, Vật liệu & Môi trường hiển thị
-- **Vật liệu `Tôn Mạ Kẽm` (hoa tôn nhỏ):**
-  - Tạo texture thủ tục (procedural canvas `map` + `roughnessMap` + `bumpMap` nhẹ) mô phỏng đúng **tôn mạ kẽm hoa nhỏ (mini-spangle)**: tông bạc xám lạnh tự nhiên, các hạt tinh thể hoa kẽm kích thước nhỏ và mịn, độ phản chiếu kim loại sắc nét (`metalness: 0.80–0.85`, độ nhám biến thiên tinh tế giữa các hạt tinh thể).
+- **Vật liệu 3D theo chủng loại vật liệu:**
+  - **`Tôn Mạ Kẽm` (hoa tôn nhỏ — khổ chuẩn `1200 mm`):** Tạo texture thủ tục (procedural canvas `map` + `roughnessMap` + `bumpMap` nhẹ) mô phỏng đúng **tôn mạ kẽm hoa nhỏ (mini-spangle)**: tông bạc xám lạnh tự nhiên, các hạt tinh thể hoa kẽm kích thước nhỏ và mịn, độ phản chiếu kim loại sắc nét (`metalness: 0.80–0.85`, độ nhám biến thiên tinh tế giữa các hạt tinh thể).
+  - **`Inox` (khổ chuẩn `1250 mm`):** Bề mặt Inox xước mịn sáng bóng (**brushed stainless steel**, tuyệt đối không có hoa kẽm), các đường xước hairline mảnh đều chạy dọc tấm, độ phản chiếu kim loại sáng mượt (`metalness: 0.90–0.94`, roughness thấp mịn).
 - **Môi trường 3D tương phản nổi bật chi tiết:**
   - Nền viewport 3D dùng **studio tối dịu tương phản cao** (gradient xám xanh đậm `#1c2432` → `#0f141d`) kèm sàn lưới kỹ thuật mờ nhẹ.
   - Hệ ánh sáng studio 3 điểm + HDRI softbox phản chiếu (Environment lightformers sáng trắng/xanh nhạt đặt góc nghiêng) + đèn rim-light bắt sáng các cạnh bẻ, kết hợp đường viền cạnh rất mảnh (`Edges` độ đậm thấp) giúp mọi nếp gấp mí, rãnh bích, khe hở góc và gân thẳng nổi khối rõ ràng, không bị lóa trắng hay chìm vào nền.
@@ -29,9 +30,11 @@
   - Chỉ sử dụng **1 dạng gân thẳng** duy nhất (các đường gân nổi thẳng song song chạy vuông góc với chiều dài `L` của ống, bước gân đều ~250–300mm), tuyệt đối không vẽ gân chéo chữ X.
 
 ## 3. Thông số hình học & Quy chuẩn nhà máy (Ống thẳng)
-### 3.1. Kích thước cơ bản
-- `W` (Width - Rộng, mm), `H` (Depth - Cao, mm), `L` (Length - Dài, mm), `t` (Độ dày tôn: `0.58, 0.75, 0.95, 1.15, 1.2, 1.5 mm`).
-- Khổ tôn chuẩn: **1200 mm** (tấm tiêu chuẩn `6000 × 1200 mm`).
+### 3.1. Kích thước cơ bản & Chủng loại vật liệu
+- `W` (Width - Rộng, mm), `H` (Depth - Cao, mm), `L` (Length - Dài, mm): hỗ trợ nhập tay mượt mà từ bàn phím và nút `-`/`+` theo **Bước nhảy** tùy chọn (`10` | `50` | `100 mm`, mặc định `50 mm`, hoặc gõ số tùy ý).
+- **Vật liệu & Độ dày chuẩn (`t`):**
+  - **Tôn Mạ Kẽm:** Độ dày `0.58, 0.75, 0.95, 1.15, 1.2, 1.5 mm`; khổ vật liệu chuẩn **`1200 mm`** (tấm tiêu chuẩn `6000 × 1200 mm`).
+  - **Inox:** Độ dày `0.6, 0.8, 1.0 mm` (tự động chọn `0.8 mm` khi chuyển từ độ dày không thuộc danh sách Inox); khổ vật liệu chuẩn **`1250 mm`** (tấm tiêu chuẩn `6000 × 1250 mm`).
 - **Quy ước chiều bẻ theo mặt tôn:**
   - `Mặt đánh dấu` là **mặt trong lòng ống** (chỉ ghi ký hiệu trên bản vẽ trải phẳng 2D, không cần in chữ rườm rà trong lòng 3D).
   - Mí đơn, LCCT, đường chấn góc thân ống đều bẻ vuông góc 90° **vào phía lòng trong (mặt đánh dấu)**.
@@ -48,14 +51,14 @@
    - Người dùng có thể tự do chọn chuyển đổi từ **Mí gò** sang **Mí hàn** cho toàn bộ ống hoặc từng đường ghép (chuẩn bị sẵn dùng chung cho các phụ kiện bắt buộc hàn ở các module sau).
    - Hỗ trợ 2 kiểu: **Mí hàn chồng** (nhập độ rộng tự do `7–25 mm`, mặc định `10 mm`) và **Hàn đấu đầu (`0–0`)**.
    - Nếu `L < 140 mm`: hiển thị gợi ý nhẹ nên chuyển sang Mí hàn (vẫn cho phép người dùng tự chọn).
-3. **Nối C (`17 + 17 mm`):** Dành cho tấm vượt khổ tôn `1200 mm` hoặc vượt chiều dài máy lăn gân (`1900 mm`).
+3. **Nối C (`17 + 17 mm`):** Dành cho tấm vượt khổ vật liệu chuẩn (`1200 mm` với Tôn Mạ Kẽm / `1250 mm` với Inox) hoặc vượt chiều dài máy lăn gân (`1900 mm`).
 
 ### 3.3. Quy tắc chia mảnh & Đảo mí tự do
-- **Tự động đề xuất theo khổ tôn 1200 mm và chu vi:**
-  - `1 mảnh` (gấp chữ O - 1 mối ghép mí): Chu vi `2*(W+H) ≤ 2400 mm` và chiều dài phôi `L_blank ≤ 1200 mm`.
-  - `2 mảnh chữ L` (2 mối ghép mí): `2*(W+H) > 2400 mm`, `(W+H) ≤ 3000 mm`, và `L_blank ≤ 1200 mm`. Mặc định: mỗi mảnh gồm 1 cạnh `W` + 1 cạnh `H`, cạnh lớn hơn mang **Mí kép**, cạnh nhỏ hơn mang **Mí đơn**.
+- **Tự động đề xuất theo khổ vật liệu chuẩn `B_sheet` (`1200 mm` Tôn Mạ Kẽm / `1250 mm` Inox) và chu vi:**
+  - `1 mảnh` (gấp chữ O - 1 mối ghép mí): Chu vi `2*(W+H) ≤ 2400 mm` và chiều dài phôi `L_blank ≤ B_sheet`.
+  - `2 mảnh chữ L` (2 mối ghép mí): `2*(W+H) > 2400 mm`, `(W+H) ≤ 3000 mm`, và `L_blank ≤ B_sheet`. Mặc định: mỗi mảnh gồm 1 cạnh `W` + 1 cạnh `H`, cạnh lớn hơn mang **Mí kép**, cạnh nhỏ hơn mang **Mí đơn**.
   - `2 mảnh chữ U+I`: Cho phép người dùng chọn thủ công để so sánh.
-  - `4 mảnh` (4 mối ghép mí): `(W+H) > 3000 mm`, HOẶC khi `L_blank > 1200 mm` mà cả `W` và `H` (sau cộng mí) đều `≤ 1200 mm` (xoay dọc tấm `6000×1200`). Mặc định: **2 tấm cạnh dài hơn mang 2 Mí kép**, **2 tấm cạnh ngắn hơn mang 2 Mí đơn**.
+  - `4 mảnh` (4 mối ghép mí): `(W+H) > 3000 mm`, HOẶC khi `L_blank > B_sheet` mà cả `W` và `H` (sau cộng mí) đều `≤ B_sheet` (xoay dọc tấm `6000 × B_sheet`). Mặc định: **2 tấm cạnh dài hơn mang 2 Mí kép**, **2 tấm cạnh ngắn hơn mang 2 Mí đơn**.
 - **Tự do tùy biến:** Cho phép chọn thủ công `1 mảnh / 2 mảnh L / 2 mảnh U+I / 4 mảnh`, bấm nút **`Đảo mí kép ↔ mí đơn`** tự do, và đổi kiểu mí `Mí gò ↔ Mí hàn`.
 
 ### 3.4. Thư viện Đầu kết nối (Chọn độc lập cho Đầu C1 và Đầu C2)

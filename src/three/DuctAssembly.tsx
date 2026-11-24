@@ -60,6 +60,7 @@ export function DuctAssembly({ config }: DuctAssemblyProps) {
       W,
       H,
       L,
+      sheetMaterial: 'galvanized',
       thickness,
       autoSplit: false,
       splitMode,
@@ -70,7 +71,7 @@ export function DuctAssembly({ config }: DuctAssemblyProps) {
       seamState: renderedSeamProgress >= 0.5 ? 'seamed' : 'unseamed',
       explode: explodeRatio * 100,
       stiffenerRibs,
-      materialMode: 'galvanized',
+      materialMode: 'realistic',
     };
     return buildDuctAssembly(geomConfig, renderedSeamProgress, explodeRatio);
   }, [
@@ -100,18 +101,25 @@ export function DuctAssembly({ config }: DuctAssemblyProps) {
   }, [assembly]);
 
   const activeMaterials =
-    config.materialMode === 'galvanized'
-      ? materialSet.galvanizedMaterials
-      : materialSet.technicalMaterials;
+    config.materialMode === 'technical'
+      ? materialSet.technicalMaterials
+      : config.sheetMaterial === 'inox'
+        ? materialSet.inoxMaterials
+        : materialSet.galvanizedMaterials;
 
   const edgeMaterial = useMemo(() => {
     return new THREE.LineBasicMaterial({
-      color: config.materialMode === 'galvanized' ? '#0c131f' : '#090e17',
+      color: config.materialMode === 'realistic' ? '#0c131f' : '#090e17',
       transparent: true,
-      opacity: config.materialMode === 'galvanized' ? 0.42 : 0.62,
+      opacity:
+        config.materialMode === 'technical'
+          ? 0.62
+          : config.sheetMaterial === 'inox'
+            ? 0.36
+            : 0.42,
       depthWrite: false,
     });
-  }, [config.materialMode]);
+  }, [config.materialMode, config.sheetMaterial]);
 
   useEffect(() => {
     return () => {
@@ -120,9 +128,11 @@ export function DuctAssembly({ config }: DuctAssemblyProps) {
   }, [edgeMaterial]);
 
   const weldBeadMat =
-    config.materialMode === 'galvanized'
-      ? materialSet.weldBeadGalvanized
-      : materialSet.weldBeadTechnical;
+    config.materialMode === 'technical'
+      ? materialSet.weldBeadTechnical
+      : config.sheetMaterial === 'inox'
+        ? materialSet.weldBeadInox
+        : materialSet.weldBeadGalvanized;
 
   return (
     <group name="duct-assembly-root">

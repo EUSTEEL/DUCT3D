@@ -5,18 +5,41 @@ import type {
   ResolvedCornerSeam,
   RibLayout,
   SeamType,
+  SheetMaterialType,
   SheetThickness,
   SplitMode,
   SplitRecommendation,
   WallId,
 } from '../types/duct';
-import { SHEET_THICKNESSES } from '../types/duct';
+import { GALVANIZED_THICKNESSES, INOX_THICKNESSES } from '../types/duct';
 
-export const SHEET_STANDARD_WIDTH = 1200; // mm (tấm chuẩn 6000 × 1200 mm)
+export const GALVANIZED_SHEET_WIDTH = 1200; // mm (tấm chuẩn 6000 × 1200 mm)
+export const INOX_SHEET_WIDTH = 1250; // mm (tấm chuẩn 6000 × 1250 mm)
 export const SHEET_STANDARD_LENGTH = 6000; // mm
 export const PITTSBURGH_FEMALE_ALLOWANCE = 31; // mm (+31 mm)
 export const PITTSBURGH_MALE_ALLOWANCE = 7; // mm (+7 mm)
-export const STEEL_DENSITY_KG_M3 = 7850; // kg/m³
+
+export const SHEET_MATERIAL_LABELS: Record<SheetMaterialType, string> = {
+  galvanized: 'Tôn Mạ Kẽm',
+  inox: 'Inox',
+};
+
+export function getSheetStandardWidth(material: SheetMaterialType): number {
+  return material === 'inox' ? INOX_SHEET_WIDTH : GALVANIZED_SHEET_WIDTH;
+}
+
+export function getAllowedThicknesses(material: SheetMaterialType): readonly SheetThickness[] {
+  return material === 'inox' ? INOX_THICKNESSES : GALVANIZED_THICKNESSES;
+}
+
+export function normalizeThicknessForMaterial(
+  thickness: SheetThickness,
+  material: SheetMaterialType
+): SheetThickness {
+  const allowed = getAllowedThicknesses(material);
+  if (allowed.includes(thickness)) return thickness;
+  return material === 'inox' ? 0.8 : 0.75;
+}
 
 export const WALL_LABELS: Record<WallId, string> = {
   top: 'Trên',
@@ -52,6 +75,7 @@ export interface DuctPreset {
   W: number;
   H: number;
   L: number;
+  sheetMaterial: SheetMaterialType;
   thickness: SheetThickness;
 }
 
@@ -63,6 +87,7 @@ export const DUCT_PRESETS: DuctPreset[] = [
     W: 500,
     H: 320,
     L: 1110,
+    sheetMaterial: 'galvanized',
     thickness: 0.75,
   },
   {
@@ -72,6 +97,7 @@ export const DUCT_PRESETS: DuctPreset[] = [
     W: 900,
     H: 600,
     L: 1110,
+    sheetMaterial: 'galvanized',
     thickness: 0.95,
   },
   {
@@ -81,15 +107,17 @@ export const DUCT_PRESETS: DuctPreset[] = [
     W: 1800,
     H: 1400,
     L: 1110,
+    sheetMaterial: 'galvanized',
     thickness: 1.2,
   },
   {
     id: 'long-4p',
     label: '800 × 500 • L1500',
-    subtitle: 'Xoay dọc khổ 1200',
+    subtitle: 'Xoay dọc khổ chuẩn',
     W: 800,
     H: 500,
     L: 1500,
+    sheetMaterial: 'galvanized',
     thickness: 0.95,
   },
   {
@@ -99,6 +127,7 @@ export const DUCT_PRESETS: DuctPreset[] = [
     W: 1200,
     H: 600,
     L: 110,
+    sheetMaterial: 'galvanized',
     thickness: 1.5,
   },
 ];
@@ -107,6 +136,7 @@ export const DEFAULT_DUCT_CONFIG: DuctConfig = {
   W: 500,
   H: 320,
   L: 1110,
+  sheetMaterial: 'galvanized',
   thickness: 0.75,
   autoSplit: true,
   splitMode: '1_piece',
@@ -117,42 +147,47 @@ export const DEFAULT_DUCT_CONFIG: DuctConfig = {
   seamState: 'seamed',
   explode: 0,
   stiffenerRibs: true,
-  materialMode: 'galvanized',
+  materialMode: 'realistic',
 };
 
 /**
- * Evaluate automatic piece splitting according to EUSTEEL factory rules (SPEC 3.3).
+ * Evaluate automatic piece splitting according to EUSTEEL factory rules (SPEC 3.3),
+ * synchronized dynamically with active sheet width (1200 mm galvanized / 1250 mm Inox).
  */
 export function evaluateSplitRecommendation(
   W: number,
   H: number,
   L: number,
+  sheetMaterial: SheetMaterialType = 'galvanized',
   c1Allowance = 0,
   c2Allowance = 0
 ): SplitRecommendation {
+  const sheetW = getSheetStandardWidth(sheetMaterial);
   const perimeter = 2 * (W + H);
   const halfPerimeter = W + H;
   const L_blank = L + c1Allowance + c2Allowance;
   const maxSideWithFemale = Math.max(W, H) + PITTSBURGH_FEMALE_ALLOWANCE * 2;
 
-  if (L_blank > SHEET_STANDARD_WIDTH) {
-    if (maxSideWithFemale <= SHEET_STANDARD_WIDTH) {
+  if (L_blank > sheetW) {
+    if (maxSideWithFemale <= sheetW) {
       return {
         recommended: '4_piece',
-        reason: `Phôi dài ${L_blank} mm > khổ tôn 1200 mm, các cạnh + mí ≤ 1200 mm → Đề xuất 4 mảnh xoay dọc tấm 6000×1200`,
+        reason: `Phôi dài ${L_blank} mm > khổ ${sheetW} mm, các cạnh + mí ≤ ${sheetW} mm → Đề xuất 4 mảnh xoay dọc tấm 6000×${sheetW}`,
         perimeter,
         halfPerimeter,
+        sheetStandardWidth: sheetW,
         rotateLongitudinal: true,
-        exceedsSheet1200: false,
+        exceedsSheetWidth: false,
       };
     }
     return {
       recommended: '4_piece',
-      reason: `Phôi dài ${L_blank} mm và cạnh lớn + mí (${maxSideWithFemale} mm) đều vượt khổ tôn 1200 mm → Đề xuất 4 mảnh kết hợp Nối C (17+17 mm)`,
+      reason: `Phôi dài ${L_blank} mm và cạnh lớn + mí (${maxSideWithFemale} mm) đều vượt khổ ${sheetW} mm → Đề xuất 4 mảnh kết hợp Nối C (17+17 mm)`,
       perimeter,
       halfPerimeter,
+      sheetStandardWidth: sheetW,
       rotateLongitudinal: true,
-      exceedsSheet1200: true,
+      exceedsSheetWidth: true,
     };
   }
 
@@ -162,8 +197,9 @@ export function evaluateSplitRecommendation(
       reason: `Nửa chu vi W+H = ${halfPerimeter.toLocaleString('vi-VN')} mm > 3.000 mm → Đề xuất chia 4 mảnh`,
       perimeter,
       halfPerimeter,
+      sheetStandardWidth: sheetW,
       rotateLongitudinal: false,
-      exceedsSheet1200: false,
+      exceedsSheetWidth: false,
     };
   }
 
@@ -173,18 +209,20 @@ export function evaluateSplitRecommendation(
       reason: `Chu vi ${perimeter.toLocaleString('vi-VN')} mm > 2.400 mm và W+H = ${halfPerimeter.toLocaleString('vi-VN')} ≤ 3.000 mm → Đề xuất 2 mảnh chữ L`,
       perimeter,
       halfPerimeter,
+      sheetStandardWidth: sheetW,
       rotateLongitudinal: false,
-      exceedsSheet1200: false,
+      exceedsSheetWidth: false,
     };
   }
 
   return {
     recommended: '1_piece',
-    reason: `Chu vi ${perimeter.toLocaleString('vi-VN')} mm ≤ 2.400 mm & phôi dài ${L_blank} ≤ 1.200 mm → Đề xuất 1 mảnh gấp chữ O`,
+    reason: `Chu vi ${perimeter.toLocaleString('vi-VN')} mm ≤ 2.400 mm & phôi dài ${L_blank} ≤ ${sheetW} mm → Đề xuất 1 mảnh gấp chữ O`,
     perimeter,
     halfPerimeter,
+    sheetStandardWidth: sheetW,
     rotateLongitudinal: false,
-    exceedsSheet1200: false,
+    exceedsSheetWidth: false,
   };
 }
 
@@ -204,7 +242,6 @@ export interface PieceTopology {
 export function getSplitTopologies(splitMode: SplitMode): PieceTopology[] {
   switch (splitMode) {
     case '1_piece':
-      // Single seam at Top-Right (TR) so it's prominently visible from default 3/4 view.
       return [
         {
           id: 'P1',
@@ -215,7 +252,6 @@ export function getSplitTopologies(splitMode: SplitMode): PieceTopology[] {
         },
       ];
     case '2_piece_L':
-      // Two seams at opposite corners TR and BL.
       return [
         {
           id: 'L1',
@@ -233,7 +269,6 @@ export function getSplitTopologies(splitMode: SplitMode): PieceTopology[] {
         },
       ];
     case '2_piece_UI':
-      // Two seams at top corners TL and TR.
       return [
         {
           id: 'U',
@@ -251,7 +286,6 @@ export function getSplitTopologies(splitMode: SplitMode): PieceTopology[] {
         },
       ];
     case '4_piece':
-      // Four seams at all four corners TL, TR, BR, BL.
       return [
         {
           id: 'T',
@@ -306,7 +340,6 @@ export function resolveActiveSeams(config: DuctConfig): ResolvedCornerSeam[] {
       ];
       break;
     case '2_piece_L':
-      // SPEC 3.3: mỗi mảnh gồm 1 cạnh W + 1 cạnh H, cạnh lớn hơn mang Mí kép, cạnh nhỏ hơn mang Mí đơn.
       baseSeams = [
         {
           cornerId: 'TR',
@@ -321,7 +354,6 @@ export function resolveActiveSeams(config: DuctConfig): ResolvedCornerSeam[] {
       ];
       break;
     case '2_piece_UI':
-      // Default: U-piece sides carry 2 Female pockets opening up; flat I-lid carries 2 Male lips dropping cleanly in.
       baseSeams = [
         {
           cornerId: 'TR',
@@ -336,7 +368,6 @@ export function resolveActiveSeams(config: DuctConfig): ResolvedCornerSeam[] {
       ];
       break;
     case '4_piece':
-      // SPEC 3.3: 2 tấm cạnh dài hơn mang 2 Mí kép, 2 tấm cạnh ngắn hơn mang 2 Mí đơn.
       baseSeams = [
         {
           cornerId: 'TR',
@@ -433,12 +464,14 @@ function getEdgeSeamAllowance(
 }
 
 /**
- * Calculate exact blank sheet dimensions & mass for every piece under current configuration.
+ * Calculate exact blank sheet dimensions & area (m²) for every piece under current configuration
+ * and active material sheet width (1200 mm galvanized / 1250 mm Inox).
  */
 export function calculateBlankAnalysis(config: DuctConfig): PieceBlankInfo[] {
   const topologies = getSplitTopologies(config.splitMode);
   const seams = resolveActiveSeams(config);
   const seamMap = new Map<CornerId, ResolvedCornerSeam>(seams.map((s) => [s.cornerId, s]));
+  const sheetW = getSheetStandardWidth(config.sheetMaterial);
 
   return topologies.map((topo) => {
     const startWall = topo.walls[0];
@@ -453,22 +486,20 @@ export function calculateBlankAnalysis(config: DuctConfig): PieceBlankInfo[] {
     const developedWidth = wallSpanSum + startEdge.allowance + endEdge.allowance;
     const blankLength = config.L;
     const bendCount = Math.max(0, topo.walls.length - 1);
-
     const areaM2 = (developedWidth / 1000) * (blankLength / 1000);
-    const weightKg = areaM2 * (config.thickness / 1000) * STEEL_DENSITY_KG_M3;
 
     let cutOrientation: PieceBlankInfo['cutOrientation'];
     let cutNote: string;
 
-    if (blankLength <= SHEET_STANDARD_WIDTH && developedWidth <= SHEET_STANDARD_LENGTH) {
-      cutOrientation = 'ngang_1200';
-      cutNote = `Cắt tiêu chuẩn theo khổ 1200 mm (L = ${blankLength} ≤ 1200)`;
-    } else if (developedWidth <= SHEET_STANDARD_WIDTH && blankLength <= SHEET_STANDARD_LENGTH) {
-      cutOrientation = 'doc_6000x1200';
-      cutNote = `Xoay dọc tấm 6000×1200 (Khai triển ${developedWidth} ≤ 1200)`;
+    if (blankLength <= sheetW && developedWidth <= SHEET_STANDARD_LENGTH) {
+      cutOrientation = 'ngang_chuan';
+      cutNote = `Cắt tiêu chuẩn theo khổ ${sheetW} mm (L = ${blankLength} ≤ ${sheetW})`;
+    } else if (developedWidth <= sheetW && blankLength <= SHEET_STANDARD_LENGTH) {
+      cutOrientation = 'doc_6000';
+      cutNote = `Xoay dọc tấm 6000×${sheetW} (Khai triển ${developedWidth} ≤ ${sheetW})`;
     } else {
       cutOrientation = 'can_noi_c';
-      cutNote = `Vượt khổ tôn 1200 mm (${developedWidth} × ${blankLength}) — Cần chia nối C (17+17 mm)`;
+      cutNote = `Vượt khổ vật liệu ${sheetW} mm (${developedWidth} × ${blankLength}) — Cần chia nối C (17+17 mm)`;
     }
 
     return {
@@ -485,7 +516,6 @@ export function calculateBlankAnalysis(config: DuctConfig): PieceBlankInfo[] {
       blankLength,
       bendCount,
       areaM2,
-      weightKg,
       cutOrientation,
       cutNote,
     };
@@ -496,6 +526,7 @@ export interface ParsedLsxResult {
   W?: number;
   H?: number;
   L?: number;
+  sheetMaterial?: SheetMaterialType;
   thickness?: SheetThickness;
   suggestWeld?: boolean;
   notes: string[];
@@ -503,12 +534,26 @@ export interface ParsedLsxResult {
 
 /**
  * Lightweight Vietnamese LSX straight-duct parser for Stage 1.
- * Example: "Ống gió KT: 500x320, L1110, tôn 0.75, bích TDC"
+ * Supports both Tôn Mạ Kẽm (1200mm) and Inox (1250mm).
  */
-export function parseStraightDuctLsx(raw: string): ParsedLsxResult {
+export function parseStraightDuctLsx(
+  raw: string,
+  currentMaterial: SheetMaterialType = 'galvanized'
+): ParsedLsxResult {
   const text = raw.trim();
   const notes: string[] = [];
   const result: ParsedLsxResult = { notes };
+
+  let targetMat: SheetMaterialType = currentMaterial;
+  if (/\binox\b|sus\s*304|sus\s*201|sus\s*316/i.test(text)) {
+    targetMat = 'inox';
+    result.sheetMaterial = 'inox';
+    notes.push('Vật liệu: Inox (khổ chuẩn 1250 mm)');
+  } else if (/tôn\s*mạ\s*kẽm|\btôn\b/i.test(text)) {
+    targetMat = 'galvanized';
+    result.sheetMaterial = 'galvanized';
+    notes.push('Vật liệu: Tôn Mạ Kẽm (khổ chuẩn 1200 mm)');
+  }
 
   // Match WxH (e.g. "KT: 500x320", "1200 x 600", "900×700")
   const whMatch = text.match(/(?:KT[:\s]*)?(\d{2,4})\s*[xX×*]\s*(\d{2,4})/i);
@@ -532,14 +577,14 @@ export function parseStraightDuctLsx(raw: string): ParsedLsxResult {
     }
   }
 
-  // Match thickness (e.g. "t0.75", "t=1.2", "dày 0.95", "tôn 1.5")
-  const tMatch = text.match(/(?:tôn|dày|\bt)\s*[:=]?\s*(0\.\d+|1\.\d+)/i);
+  // Match thickness (e.g. "t0.75", "t=1.2", "dày 0.8", "inox 0.8", "tôn 1.5")
+  const tMatch = text.match(/(?:tôn|inox|dày|\bt)\s*[:=]?\s*(0\.\d+|1\.\d+)/i);
   if (tMatch) {
     const parsedT = Number(tMatch[1]);
-    // Snap to nearest factory standard thickness
-    let nearest: SheetThickness = SHEET_THICKNESSES[0];
+    const allowed = getAllowedThicknesses(targetMat);
+    let nearest: SheetThickness = allowed[0];
     let bestDiff = Infinity;
-    for (const std of SHEET_THICKNESSES) {
+    for (const std of allowed) {
       const diff = Math.abs(std - parsedT);
       if (diff < bestDiff) {
         bestDiff = diff;
@@ -547,7 +592,7 @@ export function parseStraightDuctLsx(raw: string): ParsedLsxResult {
       }
     }
     result.thickness = nearest;
-    notes.push(`Độ dày tôn: ${nearest} mm`);
+    notes.push(`Độ dày ${SHEET_MATERIAL_LABELS[targetMat]}: ${nearest} mm`);
   }
 
   if (/mí\s*hàn|hàn\s*kín|hàn\s*chồng/i.test(text)) {

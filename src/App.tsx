@@ -2,13 +2,18 @@ import { useCallback, useState } from 'react';
 import { LeftSidebar } from './components/LeftSidebar';
 import { TopToolbar } from './components/TopToolbar';
 import { ViewportOverlays } from './components/ViewportOverlays';
-import { DEFAULT_DUCT_CONFIG, evaluateSplitRecommendation } from './domain/ductRules';
+import {
+  DEFAULT_DUCT_CONFIG,
+  evaluateSplitRecommendation,
+  normalizeThicknessForMaterial,
+} from './domain/ductRules';
 import { DuctScene } from './three/DuctScene';
 import type {
   CameraPreset,
   CornerId,
   DuctConfig,
   SeamType,
+  SheetMaterialType,
   SidebarTab,
   SplitMode,
 } from './types/duct';
@@ -16,6 +21,7 @@ import type {
 export function App() {
   const [config, setConfig] = useState<DuctConfig>(DEFAULT_DUCT_CONFIG);
   const [activeTab, setActiveTab] = useState<SidebarTab>('params');
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
   const [cameraCommand, setCameraCommand] = useState<{ preset: CameraPreset; seq: number }>({
     preset: 'iso',
     seq: 0,
@@ -29,7 +35,26 @@ export function App() {
     setConfig((prev) => {
       const next = { ...prev, [dim]: value };
       if (next.autoSplit) {
-        const rec = evaluateSplitRecommendation(next.W, next.H, next.L);
+        const rec = evaluateSplitRecommendation(next.W, next.H, next.L, next.sheetMaterial);
+        if (rec.recommended !== next.splitMode) {
+          next.splitMode = rec.recommended;
+          next.seamOverrides = {};
+        }
+      }
+      return next;
+    });
+  }, []);
+
+  const handleSheetMaterialChange = useCallback((material: SheetMaterialType) => {
+    setConfig((prev) => {
+      const nextThickness = normalizeThicknessForMaterial(prev.thickness, material);
+      const next: DuctConfig = {
+        ...prev,
+        sheetMaterial: material,
+        thickness: nextThickness,
+      };
+      if (next.autoSplit) {
+        const rec = evaluateSplitRecommendation(next.W, next.H, next.L, material);
         if (rec.recommended !== next.splitMode) {
           next.splitMode = rec.recommended;
           next.seamOverrides = {};
@@ -41,7 +66,7 @@ export function App() {
 
   const handleSelectSplitMode = useCallback((mode: SplitMode) => {
     setConfig((prev) => {
-      const rec = evaluateSplitRecommendation(prev.W, prev.H, prev.L);
+      const rec = evaluateSplitRecommendation(prev.W, prev.H, prev.L, prev.sheetMaterial);
       return {
         ...prev,
         splitMode: mode,
@@ -55,7 +80,7 @@ export function App() {
     setConfig((prev) => {
       const nextAuto = !prev.autoSplit;
       if (nextAuto) {
-        const rec = evaluateSplitRecommendation(prev.W, prev.H, prev.L);
+        const rec = evaluateSplitRecommendation(prev.W, prev.H, prev.L, prev.sheetMaterial);
         return {
           ...prev,
           autoSplit: true,
@@ -106,22 +131,26 @@ export function App() {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#0f141d] text-slate-100 md:flex-row">
-      {/* Left 340px Engineering Control Sidebar */}
-      <LeftSidebar
-        activeTab={activeTab}
-        onSelectTab={setActiveTab}
-        config={config}
-        onChange={handlePatchConfig}
-        onDimensionChange={handleDimensionChange}
-        onSelectSplitMode={handleSelectSplitMode}
-        onToggleAutoSplit={handleToggleAutoSplit}
-        onSwapSeams={handleSwapSeams}
-        onUpdateCornerSeam={handleUpdateCornerSeam}
-        onResetCornerOverrides={handleResetCornerOverrides}
-      />
+      {/* Left 340px Engineering Control Sidebar (collapsible for 100% fullscreen 3D) */}
+      {sidebarOpen && (
+        <LeftSidebar
+          activeTab={activeTab}
+          onSelectTab={setActiveTab}
+          onCollapse={() => setSidebarOpen(false)}
+          config={config}
+          onChange={handlePatchConfig}
+          onDimensionChange={handleDimensionChange}
+          onSheetMaterialChange={handleSheetMaterialChange}
+          onSelectSplitMode={handleSelectSplitMode}
+          onToggleAutoSplit={handleToggleAutoSplit}
+          onSwapSeams={handleSwapSeams}
+          onUpdateCornerSeam={handleUpdateCornerSeam}
+          onResetCornerOverrides={handleResetCornerOverrides}
+        />
+      )}
 
       {/* Right Main Workspace: Quick Toolbar + 3D Studio Viewport */}
-      <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <TopToolbar
           config={config}
           onChange={handlePatchConfig}
@@ -129,7 +158,12 @@ export function App() {
         />
         <div className="relative min-h-0 flex-1 overflow-hidden">
           <DuctScene config={config} cameraCommand={cameraCommand} />
-          <ViewportOverlays config={config} onCameraPreset={handleCameraPreset} />
+          <ViewportOverlays
+            config={config}
+            sidebarOpen={sidebarOpen}
+            onExpandSidebar={() => setSidebarOpen(true)}
+            onCameraPreset={handleCameraPreset}
+          />
         </div>
       </main>
     </div>
