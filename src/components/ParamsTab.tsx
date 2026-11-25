@@ -1039,7 +1039,7 @@ export function ParamsTab({
               <div className="flex items-center justify-between gap-2">
                 <span>Gân thẳng vuông góc L</span>
                 <span className="shrink-0 font-mono font-semibold text-sky-300">
-                  {ribLayout.count} gân • ~{Math.round(ribLayout.pitchMm)} mm
+                  {ribLayout.count} gân • bước {ribLayout.pitchMm} mm
                 </span>
               </div>
             ) : (

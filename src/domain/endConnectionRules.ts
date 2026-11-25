@@ -244,7 +244,7 @@ export function getEndNotchSummary(conn: EndConnectionConfig): string {
         conn.showEndIndent ? ' • Có dấu lõm phân biệt đầu sát góc' : ''
       }`;
     case 'nep_c':
-      return 'Bích liền thân • Bù phôi +12.5 mm • Khấu 25 mm • Tôn thân ống uốn cong 180° tạo rãnh chữ C hở 4 góc';
+      return 'Bích liền thân • Bù phôi +12.5 mm • Khấu 25 mm • Mép uốn cong 180° tạo rãnh chữ C chạy sát 4 góc (hở kỹ thuật ~1.5 mm)';
     case 'bich_v_out': {
       const { vSize } = getBichVDimensions(conn.bichVSpec);
       const notch = vSize + 5;
@@ -264,7 +264,7 @@ export function getEndNotchSummary(conn: EndConnectionConfig): string {
       return `Bích rời (2 thanh phủ bì + 2 lọt lòng, không lỗ) • Dày ${conn.bichUThickness} mm • Cánh ôm ${conn.bichUWrapLeg} × Mặt bích ${conn.bichUFlangeFace} × Gờ ngoài cố định ${BICH_U_OUTER_LIP_MM} mm quay về thân • Phôi thân +0 mm`;
     case 'plain':
       return conn.plainExtensionMm > 0
-        ? `Đoạn để thẳng mở rộng +${conn.plainExtensionMm} mm • Trơn hoàn toàn KHÔNG chạy mí dọc thân trên đoạn kéo dài để lắp cửa gió / van gió`
+        ? `Đoạn để thẳng mở rộng +${conn.plainExtensionMm} mm • Trơn hoàn toàn, KHÔNG chạy mí dọc thân trên đoạn kéo dài`
         : 'Đầu ống cắt phẳng +0 mm, không bích kết nối';
     case 'be_chan': {
       const e = conn.beChanEdges;

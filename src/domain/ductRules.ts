@@ -515,21 +515,25 @@ export function getWallLength(wall: WallId, W: number, H: number): number {
   return wall === 'top' || wall === 'bottom' ? W : H;
 }
 
+export const STIFFENER_RIB_PITCH_MM = 210;
+export const STIFFENER_RIB_MIN_END_CLEARANCE_MM = 90;
+
 export function computeRibLayout(L: number, enabled: boolean): RibLayout {
   if (!enabled || L < 220) {
     return { enabled, count: 0, pitchMm: 0, zPositionsMm: [] };
   }
 
-  const count = Math.max(1, Math.round(L / 275) - 1);
-  const pitchMm = L / (count + 1);
+  const usableSpan = L - 2 * STIFFENER_RIB_MIN_END_CLEARANCE_MM;
+  const count = Math.max(1, Math.floor(usableSpan / STIFFENER_RIB_PITCH_MM) + 1);
+  const halfSpan = ((count - 1) * STIFFENER_RIB_PITCH_MM) / 2;
   const zPositionsMm: number[] = [];
-  for (let i = 1; i <= count; i++) {
-    zPositionsMm.push(-L / 2 + i * pitchMm);
+  for (let i = 0; i < count; i++) {
+    zPositionsMm.push(-halfSpan + i * STIFFENER_RIB_PITCH_MM);
   }
   return {
     enabled: true,
     count,
-    pitchMm,
+    pitchMm: STIFFENER_RIB_PITCH_MM,
     zPositionsMm,
   };
 }

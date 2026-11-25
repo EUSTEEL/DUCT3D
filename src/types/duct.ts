@@ -57,11 +57,11 @@ export interface CornerSeamOverride {
  */
 export type EndConnectionType =
   | 'tdc_tdf' // Bích TDC/TDF liền thân (+48 mm, cao 32 mm, 4 ke góc lỗ giọt nước, tùy chọn dấu lõm sát góc)
-  | 'nep_c' // Nẹp C liền thân (+12.5 mm uốn cong vòng 180° tạo rãnh hình chữ C, hở 4 góc)
+  | 'nep_c' // Nẹp C liền thân (+12.5 mm uốn cong vòng 180° tạo rãnh chữ C chạy sát 4 góc, hở kỹ thuật ~1–2 mm)
   | 'be_chan' // Đầu bẻ chân tùy biến từng cạnh Trên/Dưới/Trái/Phải (Bẻ vào | Bẻ ra | Để thẳng, +F mm)
   | 'lcct' // Đầu gắn Lưới chắn côn trùng (+20 mm chấn vào trong + khung lưới ô vuông)
   | 'end_cap' // Đầu bịt kín (4 cạnh tùy biến Mí gò / Hàn chập / Hàn đấu đầu + Mảnh bịt đầu rời 1-E/1-F...)
-  | 'plain' // Đầu để thẳng (+L_thẳng mm đoạn kéo dài trơn không chạy mí lắp cửa gió / van gió)
+  | 'plain' // Đầu để thẳng (+L_thẳng mm đoạn kéo dài trơn hoàn toàn không chạy mí)
   | 'bich_v_out' // Bích V rời quay ngoài (V30/40/50 thường W+5 hoặc EI W-3; V80×30 cánh 30 lọt lòng W-3)
   | 'bich_v_in' // Bích V rời quay trong (phủ bì W-3 × H-3, thay thế TDC/TDF quay trong)
   | 'bich_u'; // Bích U rời (lệch cánh ôm × mặt bích × gờ bẻ ngoài cố định 10 mm quay về thân)
@@ -93,7 +93,7 @@ export interface EndConnectionConfig {
   /** Đầu bẻ chân tùy biến độc lập từng cạnh Trên / Dưới / Trái / Phải */
   beChanEdges: BeChanEdges;
   beChanWidth: number; // F (mặc định 20 mm)
-  /** Đầu để thẳng: đoạn kéo dài lắp cửa gió/van gió (mặc định 0 mm, không chạy mí trên suốt đoạn này) */
+  /** Đầu để thẳng: chiều dài đoạn kéo dài trơn không chạy mí (mặc định 0 mm) */
   plainExtensionMm: number;
   /** Đầu gắn LCCT */
   showLcctMesh: boolean;

@@ -10,7 +10,7 @@ import {
   getBichVDimensions,
   getEndCapEdgeSeam,
 } from './endConnectionRules';
-import { getEndCapPartCode, getWallLength } from './ductRules';
+import { computeRibLayout, getEndCapPartCode, getWallLength } from './ductRules';
 
 export const MM_TO_M = 0.001;
 
@@ -478,9 +478,9 @@ export function appendPieceIntegralEndFlanges(
         });
       }
 
-      // 2. Nẹp C liền thân (+12.5 mm uốn cong vòng ra ngoài 180° tạo rãnh chữ C rỗng thật, hở 4 góc!)
+      // 2. Nẹp C liền thân (+12.5 mm uốn cong vòng ra ngoài 180° tạo rãnh chữ C rỗng thật, chạy sát 4 góc!)
       else if (conn.type === 'nep_c') {
-        const Rc = 2.4; // tạo khe hở lòng chữ C rõ nét ~3.8–4.2 mm giữa thành ống và mép uốn C
+        const Rc = Math.max(2.4, 1.8 * t + 0.9); // tạo khe hở lòng chữ C rõ nét & không cấn mí kép góc
         const rCenter = 0.5 * t + Rc;
         const arcSteps = 7;
         const profile: ProfilePt2[] = [];
@@ -493,11 +493,14 @@ export function appendPieceIntegralEndFlanges(
         }
         // Straight outer returned C-lip hugging parallel along exterior wall + subtle inward guide tip
         profile.push({ r: rCenter + Rc, dz: -10.5 });
-        profile.push({ r: rCenter + Rc - 1.5, dz: -11.8 });
+        profile.push({ r: rCenter + Rc - 0.9, dz: -11.8 });
 
+        // Chạy sát ra tận mép góc của từng mặt ống (chiều dài thanh Nẹp C ≈ W và H),
+        // chỉ chừa khe hở kỹ thuật rất nhỏ ~1.2–2.0 mm tại đúng giao điểm 90° của 4 góc
+        const cornerClearMm = Math.max(1.2, Math.min(2.0, t + 0.6));
         appendWallEndProfile(zoneBuffers[5], wall, W, H, L, t, endSign, profile, {
-          startTrimMm: 12.5,
-          endTrimMm: 12.5,
+          startTrimMm: cornerClearMm,
+          endTrimMm: cornerClearMm,
           wallRotations: rots,
         });
       }
@@ -515,7 +518,7 @@ export function appendPieceIntegralEndFlanges(
         });
       }
 
-      // 4. Đầu để thẳng (plain) có đoạn kéo dài lắp cửa gió / van gió (L_thẳng > 0: TRƠN HOÀN TOÀN KHÔNG CHẠY MÍ!)
+      // 4. Đầu để thẳng (plain) có đoạn kéo dài trơn hoàn toàn (L_thẳng > 0: KHÔNG chạy mí!)
       else if (conn.type === 'plain' && conn.plainExtensionMm > 0) {
         const ext = Math.max(0, Math.min(300, conn.plainExtensionMm));
         // Clean flat straight wall sleeve extending outward from z = ±L/2 to ±(L/2 + ext) with NO seams!
@@ -1236,18 +1239,11 @@ function buildEndCapPanel(
     5: { positions: [], uvs: [] },
   };
 
-  // Straight parallel embossed stiffener ribs on End Cap (NEVER X-ribs)
+  // Straight parallel embossed stiffener ribs on End Cap (exact fixed 210 mm pitch, NEVER X-ribs)
   const ribAlongX = W >= H;
   const spanPerp = ribAlongX ? capH : capW;
   const spanAlong = ribAlongX ? capW : capH;
-  const ribCount = stiffenerRibs && spanPerp >= 280 ? Math.max(1, Math.round(spanPerp / 275) - 1) : 0;
-  const ribCenters: number[] = [];
-  if (ribCount > 0) {
-    const pitch = spanPerp / (ribCount + 1);
-    for (let i = 1; i <= ribCount; i++) {
-      ribCenters.push(-spanPerp / 2 + i * pitch);
-    }
-  }
+  const ribCenters = computeRibLayout(spanPerp, stiffenerRibs).zPositionsMm;
 
   const smoothstep = (e0: number, e1: number, x: number) => {
     const u = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));

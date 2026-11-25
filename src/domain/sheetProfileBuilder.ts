@@ -1323,7 +1323,7 @@ function buildPieceInnerLabels(
   if (ribZPositions.length > 0) {
     const lastRib = ribZPositions[ribZPositions.length - 1];
     const frontBay = L / 2 - lastRib;
-    if (frontBay >= 95) {
+    if (frontBay >= 85) {
       labelZ = lastRib + frontBay * 0.5;
       baySpanZ = frontBay - 24;
     } else if (ribZPositions.length >= 2) {

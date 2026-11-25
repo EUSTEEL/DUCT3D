@@ -30,7 +30,8 @@
   - Hiển thị chữ đánh dấu (`1-A`, `1-B`...) sắc nét ngay trên **mặt đánh dấu (lòng trong)** của từng mảnh/mặt tôn trong không gian 3D (chỉ đánh dấu tên mảnh/mặt trong lòng, **KHÔNG** chèn chữ ghi chú lên các đường mí hay mép bích).
   - Cho phép **click trực tiếp vào từng mảnh/mặt trên 3D** hoặc chọn từ danh sách thẻ `1-A`, `1-B`... để làm nổi bật mảnh/mặt đó và tùy chỉnh riêng từng đường mí, cạnh bẻ chân hoặc phụ kiện gắn lên mặt đó.
 - **Gân tăng cứng:**
-  - Chỉ sử dụng **1 dạng gân thẳng** duy nhất (các đường gân nổi thẳng song song chạy vuông góc với chiều dài `L` của ống, bước gân đều ~250–300mm), tuyệt đối không vẽ gân chéo chữ X.
+  - Chỉ sử dụng **1 dạng gân thẳng** duy nhất (các đường gân nổi thẳng song song chạy vuông góc với chiều dài `L` của ống, áp dụng đồng bộ cho thân ống và mảnh bịt đầu nếu có), tuyệt đối không vẽ gân chéo chữ X.
+  - **Bước gân cố định chính xác `210 mm`** (khoảng cách tâm–tâm giữa 2 đường gân liền kề = `210 mm`), căn đối xứng từ giữa chiều dài `L` ra hai đầu, giữ khoảng hở an toàn tối thiểu `90 mm` mỗi đầu để không vẽ gân đè lên vùng bích/mí đầu ống (ống ngắn `L < 220 mm` tự động bỏ qua gân).
 
 ## 3. Thông số hình học & Quy chuẩn nhà máy (Ống thẳng)
 ### 3.1. Kích thước cơ bản & Chủng loại vật liệu
@@ -74,7 +75,7 @@
    - Tùy chọn **`Dấu lõm phân biệt đầu`** (vết lõm nhỏ duy nhất ở cạnh đầu sát góc, dùng cho chi tiết không đối xứng như côn/cút/Z thu; **mặc định TẮT với ống thẳng**).
 2. **`Nẹp C` (Gộp chung — Bích liền thân ống, KHÔNG vẽ thanh cài rời màu vàng):**
    - Phôi cộng `+12.5 mm`, khấu góc `25 mm`.
-   - Phần tôn thừa `+12.5 mm` liền với thân ống được **uốn cong vòng ra ngoài 180° tạo rãnh hình chữ C** có khe hở lòng chữ C rõ nét và khe hở thoáng ở cả 4 góc ống.
+   - Phần tôn thừa `+12.5 mm` liền với thân ống được **uốn cong vòng ra ngoài 180° tạo rãnh hình chữ C** có khe hở lòng chữ C rõ nét; cả 4 cạnh Nẹp C **chạy sát ra tận mép góc của từng mặt ống** (chiều dài thanh Nẹp C gần bằng đúng `W` và `H`, chỉ chừa khe hở kỹ thuật rất nhỏ ~`1–2 mm` tại giao điểm 90° của 4 góc để 2 mép không đâm xuyên vào nhau).
 3. **`Đầu bẻ chân` (Tùy biến độc lập từng cạnh):**
    - Chiều rộng bẻ chân `F` nhập tay tự do (mặc định `20 mm`), phôi cộng `+F mm` cho các mảnh có cạnh bẻ (`+0 mm` nếu mảnh chỉ gồm cạnh để thẳng).
    - Cho phép tùy chỉnh độc lập 4 cạnh **`Trên / Dưới / Trái / Phải`** với 3 trạng thái: **`Bẻ vào` | `Bẻ ra` | `Để thẳng`**.
@@ -82,11 +83,11 @@
 4. **`Lưới chắn côn trùng (LCCT)`:**
    - Phôi cộng `+20 mm`, chấn vuông góc 90° quay vào lòng trong, kèm nút bật/tắt hiển thị **khung lưới ô vuông có nẹp chia ô** bên trong.
 5. **`Đầu bịt kín (End Cap)`:**
-   - Mặc định 4 cạnh đầu thân ống chạy **Mí kép chờ (`+31 mm`)** và sinh **Mảnh bịt đầu rời (`1-B` / `1-E` / `1-F`...)** có 4 cạnh **Mí đơn (`+7 mm`, vát 45°)** cùng gân thẳng.
+   - Mặc định 4 cạnh đầu thân ống chạy **Mí kép chờ (`+31 mm`)** và sinh **Mảnh bịt đầu rời (`1-B` / `1-E` / `1-F`...)** có 4 cạnh **Mí đơn (`+7 mm`, vát 45°)** cùng gân thẳng (bước cố định `210 mm`).
    - Hỗ trợ tự do chuyển đổi toàn bộ hoặc từng cạnh (`Trên / Dưới / Trái / Phải`) sang **`Hàn chập`** (`7–25 mm`) hoặc **`Hàn đấu đầu`** (`0–0`), đồng bộ kích thước phôi mảnh bịt đầu trong tab `S Phôi`.
-6. **`Đầu để thẳng` (Kéo dài trơn lắp cửa gió / van gió):**
+6. **`Đầu để thẳng` (Đoạn trơn không chạy mí):**
    - Bổ sung ô nhập tay **Chiều dài đoạn để thẳng `L_thẳng`** (`0, 20, 30, 40 mm...`, mặc định `0 mm`; bù phôi `+L_thẳng mm`).
-   - **Quy tắc bắt buộc:** Trên suốt chiều dài đoạn để thẳng mở rộng (`L_thẳng > 0`), thân ống **để thẳng trơn hoàn toàn, KHÔNG chạy mí** (đường mí ghép dọc thân dừng lại trước đoạn để thẳng) để đút vừa cửa gió hoặc van gió.
+   - **Quy tắc bắt buộc:** Trên suốt chiều dài đoạn để thẳng mở rộng (`L_thẳng > 0`), thân ống **để thẳng trơn hoàn toàn, KHÔNG chạy mí** (đường mí ghép dọc thân dừng lại trước đoạn để thẳng).
 
 #### B. Nhóm Bích rời (KHÔNG vẽ lỗ, ghép vuông góc 2 thanh phủ bì + 2 thanh lọt lòng)
 - **Quy tắc ghép góc bắt buộc cho cả Bích V & Bích U:** Không cắt vát chéo 45° trên mặt phẳng khung bích. Khung bích chữ nhật được ghép vuông góc từ **2 thanh có chiều dài phủ bì** và **2 thanh có chiều dài lọt lòng**; góc vát chỉ nằm ở phần thừa đuôi cánh ôm phía sau để không bị cấn góc. **Không vẽ lỗ** trên cả Bích V lẫn Bích U.

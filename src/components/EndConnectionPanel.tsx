@@ -541,7 +541,7 @@ export function EndConnectionPanel({
         </div>
       )}
 
-      {/* 5. Đầu để thẳng: đoạn kéo dài lắp cửa gió / van gió (trơn hoàn toàn KHÔNG chạy mí!) */}
+      {/* 5. Đầu để thẳng: đoạn kéo dài trơn hoàn toàn KHÔNG chạy mí */}
       {activeConn.type === 'plain' && (
         <div className="space-y-2 rounded-lg border border-[#232e40] bg-[#141b26] p-2.5">
           <div className="flex items-center justify-between gap-2">
@@ -553,7 +553,7 @@ export function EndConnectionPanel({
                 Chiều dài đoạn để thẳng (mm)
               </label>
               <span className="text-[10px] text-slate-400">
-                Đoạn trơn không chạy mí để lắp cửa gió / van gió
+                Đoạn trơn không chạy mí
               </span>
             </div>
             <div className="flex items-center gap-1">
