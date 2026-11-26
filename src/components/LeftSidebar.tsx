@@ -1,12 +1,11 @@
 import { FileSpreadsheet, FileText, PanelLeftClose, SlidersHorizontal } from 'lucide-react';
 import type {
-  CornerId,
   DuctConfig,
-  EndConnectionConfig,
-  SeamType,
+  SelectionTarget,
   SheetMaterialType,
   SidebarTab,
   SplitMode,
+  WorkshopSettings,
 } from '../types/duct';
 import { BlankAnalysisTab } from './BlankAnalysisTab';
 import { LsxTab } from './LsxTab';
@@ -17,21 +16,16 @@ interface LeftSidebarProps {
   onSelectTab: (tab: SidebarTab) => void;
   onCollapse: () => void;
   config: DuctConfig;
-  selectedPartCode: string | null;
-  onSelectPart: (partCode: string | null) => void;
+  workshopSettings: WorkshopSettings;
+  selection: SelectionTarget;
+  onSelectTarget: (target: SelectionTarget) => void;
   onChange: (patch: Partial<DuctConfig>) => void;
   onDimensionChange: (dim: 'W' | 'H' | 'L', value: number) => void;
   onSheetMaterialChange: (material: SheetMaterialType) => void;
-  onUpdateEndConnection: (end: 'c1' | 'c2', patch: Partial<EndConnectionConfig>) => void;
   onCopyC1ToC2: () => void;
   onSelectSplitMode: (mode: SplitMode) => void;
   onToggleAutoSplit: () => void;
   onSwapSeams: () => void;
-  onUpdateCornerSeam: (
-    cornerId: CornerId,
-    patch: { seamType?: SeamType; weldOverlapWidth?: number; inverted?: boolean }
-  ) => void;
-  onResetCornerOverrides: () => void;
 }
 
 export function LeftSidebar({
@@ -39,18 +33,16 @@ export function LeftSidebar({
   onSelectTab,
   onCollapse,
   config,
-  selectedPartCode,
-  onSelectPart,
+  workshopSettings,
+  selection,
+  onSelectTarget,
   onChange,
   onDimensionChange,
   onSheetMaterialChange,
-  onUpdateEndConnection,
   onCopyC1ToC2,
   onSelectSplitMode,
   onToggleAutoSplit,
   onSwapSeams,
-  onUpdateCornerSeam,
-  onResetCornerOverrides,
 }: LeftSidebarProps) {
   const tabs: { id: SidebarTab; label: string; icon: typeof SlidersHorizontal }[] = [
     { id: 'params', label: 'Thông số', icon: SlidersHorizontal },
@@ -58,8 +50,10 @@ export function LeftSidebar({
     { id: 'blank', label: 'S Phôi', icon: FileSpreadsheet },
   ];
 
+  const selectedPartCode = selection?.kind === 'piece' ? selection.partCode : null;
+
   return (
-    <aside className="flex h-full w-full shrink-0 flex-col border-r border-[#222d3d] bg-[#11161f] md:w-[340px]">
+    <aside className="flex h-full w-full shrink-0 flex-col border-r border-[#222d3d] bg-[#11161f] md:w-[320px]">
       {/* Brand Header + Collapse Sidebar Button */}
       <div className="flex items-center justify-between border-b border-[#202b3b] px-4 py-3">
         <div>
@@ -78,7 +72,7 @@ export function LeftSidebar({
 
         <div className="flex items-center gap-1.5">
           <span className="rounded bg-[#1a2433] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-sky-300">
-            M1.2
+            M1.3
           </span>
           <button
             id="btn-collapse-sidebar"
@@ -121,30 +115,33 @@ export function LeftSidebar({
       </nav>
 
       {/* Scrollable Tab Body */}
-      <div className="cad-scroll flex-1 overflow-y-auto px-3.5 pt-3.5">
+      <div className="cad-scroll flex-1 overflow-y-auto px-3.5 pt-3">
         {activeTab === 'params' && (
           <ParamsTab
             config={config}
-            selectedPartCode={selectedPartCode}
-            onSelectPart={onSelectPart}
+            workshopSettings={workshopSettings}
+            selection={selection}
+            onSelectTarget={onSelectTarget}
             onChange={onChange}
             onDimensionChange={onDimensionChange}
             onSheetMaterialChange={onSheetMaterialChange}
-            onUpdateEndConnection={onUpdateEndConnection}
             onCopyC1ToC2={onCopyC1ToC2}
             onSelectSplitMode={onSelectSplitMode}
             onToggleAutoSplit={onToggleAutoSplit}
             onSwapSeams={onSwapSeams}
-            onUpdateCornerSeam={onUpdateCornerSeam}
-            onResetCornerOverrides={onResetCornerOverrides}
           />
         )}
-        {activeTab === 'lsx' && <LsxTab config={config} onApplyConfig={onChange} />}
+        {activeTab === 'lsx' && (
+          <LsxTab config={config} workshopSettings={workshopSettings} onApplyConfig={onChange} />
+        )}
         {activeTab === 'blank' && (
           <BlankAnalysisTab
             config={config}
+            workshopSettings={workshopSettings}
             selectedPartCode={selectedPartCode}
-            onSelectPart={onSelectPart}
+            onSelectPart={(code) =>
+              onSelectTarget(code ? { kind: 'piece', partCode: code } : null)
+            }
           />
         )}
       </div>

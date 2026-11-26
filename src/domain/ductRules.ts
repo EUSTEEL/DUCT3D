@@ -11,6 +11,7 @@ import type {
   SplitMode,
   SplitRecommendation,
   WallId,
+  WorkshopSettings,
 } from '../types/duct';
 import { GALVANIZED_THICKNESSES, INOX_THICKNESSES } from '../types/duct';
 import {
@@ -21,9 +22,10 @@ import {
   getPieceEndAllowanceMm,
   getEndAllowanceLabel,
 } from './endConnectionRules';
+import { DEFAULT_WORKSHOP_SETTINGS, getActiveSheetDimensions } from './workshopSettings';
 
-export const GALVANIZED_SHEET_WIDTH = 1200; // mm (tấm chuẩn 6000 × 1200 mm)
-export const INOX_SHEET_WIDTH = 1250; // mm (tấm chuẩn 6000 × 1250 mm)
+export const GALVANIZED_SHEET_WIDTH = 1200; // mm (tấm chuẩn 1200 × 6000 mm)
+export const INOX_SHEET_WIDTH = 1250; // mm (tấm chuẩn 1250 × 6000 mm)
 export const SHEET_STANDARD_LENGTH = 6000; // mm
 export const PITTSBURGH_FEMALE_ALLOWANCE = 31; // mm (+31 mm)
 export const PITTSBURGH_MALE_ALLOWANCE = 7; // mm (+7 mm)
@@ -33,8 +35,18 @@ export const SHEET_MATERIAL_LABELS: Record<SheetMaterialType, string> = {
   inox: 'Inox',
 };
 
-export function getSheetStandardWidth(material: SheetMaterialType): number {
-  return material === 'inox' ? INOX_SHEET_WIDTH : GALVANIZED_SHEET_WIDTH;
+export function getSheetStandardWidth(
+  material: SheetMaterialType,
+  settings: WorkshopSettings = DEFAULT_WORKSHOP_SETTINGS
+): number {
+  return getActiveSheetDimensions(material, settings).widthMm;
+}
+
+export function getSheetStandardLength(
+  material: SheetMaterialType,
+  settings: WorkshopSettings = DEFAULT_WORKSHOP_SETTINGS
+): number {
+  return getActiveSheetDimensions(material, settings).lengthMm;
 }
 
 export function getAllowedThicknesses(material: SheetMaterialType): readonly SheetThickness[] {
@@ -189,6 +201,7 @@ export const DEFAULT_DUCT_CONFIG: DuctConfig = {
   c2: createDefaultEndConnection('tdc_tdf'),
   seamState: 'seamed',
   explode: 0,
+  unfoldProgress: 0,
   stiffenerRibs: true,
   showFaceLabels: true,
   materialMode: 'realistic',
@@ -196,8 +209,8 @@ export const DEFAULT_DUCT_CONFIG: DuctConfig = {
 
 /**
  * Evaluate automatic piece splitting according to EUSTEEL factory rules (SPEC 3.3),
- * synchronized dynamically with active sheet width (1200 mm Galvanized / 1250 mm Inox)
- * AND total blank length L_phôi = L + bù C1 + bù C2.
+ * synchronized dynamically with WorkshopSettings sheet size (default 1200×6000 / 1250×6000 mm)
+ * AND total blank length L_phôi = L + bù C1 + bù C2, allowing both 0° and 90° cutting orientations.
  */
 export function evaluateSplitRecommendation(
   W: number,
@@ -205,44 +218,81 @@ export function evaluateSplitRecommendation(
   L: number,
   sheetMaterial: SheetMaterialType = 'galvanized',
   c1Allowance = 0,
-  c2Allowance = 0
+  c2Allowance = 0,
+  settings: WorkshopSettings = DEFAULT_WORKSHOP_SETTINGS
 ): SplitRecommendation {
-  const sheetW = getSheetStandardWidth(sheetMaterial);
+  const { widthMm: sheetW, lengthMm: sheetL } = getActiveSheetDimensions(sheetMaterial, settings);
   const perimeter = 2 * (W + H);
   const halfPerimeter = W + H;
   const blankLength = L + c1Allowance + c2Allowance;
+  const onePieceWidth = perimeter + PITTSBURGH_FEMALE_ALLOWANCE + PITTSBURGH_MALE_ALLOWANCE;
+  const twoLWidth = halfPerimeter + PITTSBURGH_FEMALE_ALLOWANCE + PITTSBURGH_MALE_ALLOWANCE;
   const maxSideWithFemale = Math.max(W, H) + PITTSBURGH_FEMALE_ALLOWANCE * 2;
 
   if (blankLength > sheetW) {
-    if (maxSideWithFemale <= sheetW) {
-      return {
-        recommended: '4_piece',
-        reason: `L_phôi = ${blankLength} mm > khổ ${sheetW} mm, cạnh + mí ≤ ${sheetW} mm → Đề xuất 4 mảnh xoay dọc tấm 6000×${sheetW}`,
-        perimeter,
-        halfPerimeter,
-        blankLength,
-        c1Allowance,
-        c2Allowance,
-        sheetStandardWidth: sheetW,
-        rotateLongitudinal: true,
-        exceedsSheetWidth: false,
-      };
+    if (blankLength <= sheetL) {
+      if (onePieceWidth <= sheetW) {
+        return {
+          recommended: '1_piece',
+          reason: `L_phôi = ${blankLength} mm > ${sheetW} mm nhưng khổ trải ${onePieceWidth} ≤ ${sheetW} mm → Đạt 1 mảnh xoay dọc tấm ${sheetW}×${sheetL}`,
+          perimeter,
+          halfPerimeter,
+          blankLength,
+          c1Allowance,
+          c2Allowance,
+          sheetStandardWidth: sheetW,
+          sheetStandardLength: sheetL,
+          rotateLongitudinal: true,
+          exceedsSheetWidth: false,
+        };
+      }
+      if (twoLWidth <= sheetW) {
+        return {
+          recommended: '2_piece_L',
+          reason: `L_phôi = ${blankLength} mm > ${sheetW} mm, nửa chu vi + mí = ${twoLWidth} ≤ ${sheetW} mm → Đề xuất 2 mảnh L xoay dọc tấm ${sheetW}×${sheetL}`,
+          perimeter,
+          halfPerimeter,
+          blankLength,
+          c1Allowance,
+          c2Allowance,
+          sheetStandardWidth: sheetW,
+          sheetStandardLength: sheetL,
+          rotateLongitudinal: true,
+          exceedsSheetWidth: false,
+        };
+      }
+      if (maxSideWithFemale <= sheetW) {
+        return {
+          recommended: '4_piece',
+          reason: `L_phôi = ${blankLength} mm > ${sheetW} mm, cạnh lớn + mí (${maxSideWithFemale}) ≤ ${sheetW} mm → Đề xuất 4 mảnh xoay dọc tấm ${sheetW}×${sheetL}`,
+          perimeter,
+          halfPerimeter,
+          blankLength,
+          c1Allowance,
+          c2Allowance,
+          sheetStandardWidth: sheetW,
+          sheetStandardLength: sheetL,
+          rotateLongitudinal: true,
+          exceedsSheetWidth: false,
+        };
+      }
     }
     return {
       recommended: '4_piece',
-      reason: `L_phôi = ${blankLength} mm và cạnh lớn + mí (${maxSideWithFemale} mm) đều vượt khổ ${sheetW} mm → Đề xuất 4 mảnh kết hợp Nối C (17+17 mm)`,
+      reason: `L_phôi = ${blankLength} mm và cạnh lớn + mí (${maxSideWithFemale} mm) vượt khổ ${sheetW}×${sheetL} mm → Đề xuất 4 mảnh kết hợp Nối C (17+17 mm)`,
       perimeter,
       halfPerimeter,
       blankLength,
       c1Allowance,
       c2Allowance,
       sheetStandardWidth: sheetW,
+      sheetStandardLength: sheetL,
       rotateLongitudinal: true,
       exceedsSheetWidth: true,
     };
   }
 
-  if (halfPerimeter > 3000) {
+  if (halfPerimeter > 3000 || twoLWidth > sheetL) {
     return {
       recommended: '4_piece',
       reason: `Nửa chu vi W+H = ${halfPerimeter.toLocaleString('vi-VN')} mm > 3.000 mm → Đề xuất chia 4 mảnh`,
@@ -252,12 +302,13 @@ export function evaluateSplitRecommendation(
       c1Allowance,
       c2Allowance,
       sheetStandardWidth: sheetW,
+      sheetStandardLength: sheetL,
       rotateLongitudinal: false,
       exceedsSheetWidth: false,
     };
   }
 
-  if (perimeter > 2400) {
+  if (perimeter > 2400 || onePieceWidth > sheetL) {
     return {
       recommended: '2_piece_L',
       reason: `Chu vi ${perimeter.toLocaleString('vi-VN')} mm > 2.400 mm và W+H = ${halfPerimeter.toLocaleString('vi-VN')} ≤ 3.000 mm → Đề xuất 2 mảnh chữ L`,
@@ -267,6 +318,7 @@ export function evaluateSplitRecommendation(
       c1Allowance,
       c2Allowance,
       sheetStandardWidth: sheetW,
+      sheetStandardLength: sheetL,
       rotateLongitudinal: false,
       exceedsSheetWidth: false,
     };
@@ -281,6 +333,7 @@ export function evaluateSplitRecommendation(
     c1Allowance,
     c2Allowance,
     sheetStandardWidth: sheetW,
+    sheetStandardLength: sheetL,
     rotateLongitudinal: false,
     exceedsSheetWidth: false,
   };
@@ -292,7 +345,8 @@ export function evaluateSplitForConfig(
   L: number,
   sheetMaterial: SheetMaterialType,
   c1: EndConnectionConfig,
-  c2: EndConnectionConfig
+  c2: EndConnectionConfig,
+  settings: WorkshopSettings = DEFAULT_WORKSHOP_SETTINGS
 ): SplitRecommendation {
   return evaluateSplitRecommendation(
     W,
@@ -300,7 +354,8 @@ export function evaluateSplitForConfig(
     L,
     sheetMaterial,
     getEndAllowanceMm(c1),
-    getEndAllowanceMm(c2)
+    getEndAllowanceMm(c2),
+    settings
   );
 }
 
@@ -518,22 +573,27 @@ export function getWallLength(wall: WallId, W: number, H: number): number {
 export const STIFFENER_RIB_PITCH_MM = 210;
 export const STIFFENER_RIB_MIN_END_CLEARANCE_MM = 90;
 
-export function computeRibLayout(L: number, enabled: boolean): RibLayout {
+export function computeRibLayout(
+  L: number,
+  enabled: boolean,
+  pitchMm: number = STIFFENER_RIB_PITCH_MM
+): RibLayout {
+  const safePitch = Math.max(80, Math.min(600, Math.round(pitchMm)));
   if (!enabled || L < 220) {
-    return { enabled, count: 0, pitchMm: 0, zPositionsMm: [] };
+    return { enabled, count: 0, pitchMm: safePitch, zPositionsMm: [] };
   }
 
   const usableSpan = L - 2 * STIFFENER_RIB_MIN_END_CLEARANCE_MM;
-  const count = Math.max(1, Math.floor(usableSpan / STIFFENER_RIB_PITCH_MM) + 1);
-  const halfSpan = ((count - 1) * STIFFENER_RIB_PITCH_MM) / 2;
+  const count = Math.max(1, Math.floor(usableSpan / safePitch) + 1);
+  const halfSpan = ((count - 1) * safePitch) / 2;
   const zPositionsMm: number[] = [];
   for (let i = 0; i < count; i++) {
-    zPositionsMm.push(-halfSpan + i * STIFFENER_RIB_PITCH_MM);
+    zPositionsMm.push(-halfSpan + i * safePitch);
   }
   return {
     enabled: true,
     count,
-    pitchMm: STIFFENER_RIB_PITCH_MM,
+    pitchMm: safePitch,
     zPositionsMm,
   };
 }
@@ -559,23 +619,24 @@ function getEdgeSeamAllowance(
 function evaluateCutOrientation(
   developedWidth: number,
   blankLength: number,
-  sheetW: number
+  sheetW: number,
+  sheetL: number
 ): { cutOrientation: PieceBlankInfo['cutOrientation']; cutNote: string } {
-  if (blankLength <= sheetW && developedWidth <= SHEET_STANDARD_LENGTH) {
+  if (blankLength <= sheetW && developedWidth <= sheetL) {
     return {
       cutOrientation: 'ngang_chuan',
-      cutNote: `Cắt tiêu chuẩn theo khổ ${sheetW} mm (${blankLength} ≤ ${sheetW})`,
+      cutNote: `Đạt — Cắt ngang khổ ${sheetW} mm (${blankLength} ≤ ${sheetW})`,
     };
   }
-  if (developedWidth <= sheetW && blankLength <= SHEET_STANDARD_LENGTH) {
+  if (developedWidth <= sheetW && blankLength <= sheetL) {
     return {
       cutOrientation: 'doc_6000',
-      cutNote: `Xoay dọc tấm 6000×${sheetW} (${developedWidth} ≤ ${sheetW})`,
+      cutNote: `Đạt — Xoay dọc tấm ${sheetW}×${sheetL} (${developedWidth} ≤ ${sheetW})`,
     };
   }
   return {
     cutOrientation: 'can_noi_c',
-    cutNote: `Vượt khổ vật liệu ${sheetW} mm (${developedWidth} × ${blankLength}) — Cần chia nối C (17+17 mm)`,
+    cutNote: `Vượt khổ tấm ${sheetW}×${sheetL} (${developedWidth} × ${blankLength}) — Cần chia mảnh hoặc Nối C (17+17 mm)`,
   };
 }
 
@@ -590,11 +651,14 @@ function formatEndCapEdgeShort(seam: SeamType, lapW: number): string {
  * (per-piece L_phôi = L + bù C1(walls) + bù C2(walls)) AND any removable End Cap (`1-B`/`1-E`/`1-F`).
  * Never calculates or exposes weight (kg).
  */
-export function calculateBlankAnalysis(config: DuctConfig): PieceBlankInfo[] {
+export function calculateBlankAnalysis(
+  config: DuctConfig,
+  settings: WorkshopSettings = DEFAULT_WORKSHOP_SETTINGS
+): PieceBlankInfo[] {
   const topologies = getSplitTopologies(config.splitMode);
   const seams = resolveActiveSeams(config);
   const seamMap = new Map<CornerId, ResolvedCornerSeam>(seams.map((s) => [s.cornerId, s]));
-  const sheetW = getSheetStandardWidth(config.sheetMaterial);
+  const { widthMm: sheetW, lengthMm: sheetL } = getActiveSheetDimensions(config.sheetMaterial, settings);
 
   const pieces: PieceBlankInfo[] = topologies.map((topo) => {
     const startWall = topo.walls[0];
@@ -615,7 +679,12 @@ export function calculateBlankAnalysis(config: DuctConfig): PieceBlankInfo[] {
     const developedWidth = wallSpanSum + startEdge.allowance + endEdge.allowance;
     const bendCount = Math.max(0, topo.walls.length - 1);
     const areaM2 = (developedWidth / 1000) * (blankLength / 1000);
-    const { cutOrientation, cutNote } = evaluateCutOrientation(developedWidth, blankLength, sheetW);
+    const { cutOrientation, cutNote } = evaluateCutOrientation(
+      developedWidth,
+      blankLength,
+      sheetW,
+      sheetL
+    );
 
     return {
       id: topo.id,
@@ -661,17 +730,7 @@ export function calculateBlankAnalysis(config: DuctConfig): PieceBlankInfo[] {
     const areaM2 = (capW / 1000) * (capH / 1000);
     const lapW = side.conn.endCapWeldOverlapWidth;
 
-    const minDim = Math.min(capW, capH);
-    const maxDim = Math.max(capW, capH);
-    let cutOrientation: PieceBlankInfo['cutOrientation'];
-    let cutNote: string;
-    if (minDim <= sheetW && maxDim <= SHEET_STANDARD_LENGTH) {
-      cutOrientation = 'ngang_chuan';
-      cutNote = `Lọt khổ ${sheetW} mm (${capW} × ${capH} mm)`;
-    } else {
-      cutOrientation = 'can_noi_c';
-      cutNote = `Mảnh bịt đầu vượt khổ ${sheetW} mm (${capW} × ${capH} mm) — Cần ghép nối`;
-    }
+    const { cutOrientation, cutNote } = evaluateCutOrientation(capW, capH, sheetW, sheetL);
 
     const bendCount = (['top', 'bottom', 'left', 'right'] as WallId[]).filter(
       (w) => getEndCapEdgeSeam(side.conn, w) !== 'weld_butt'

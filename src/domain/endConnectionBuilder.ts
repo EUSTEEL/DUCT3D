@@ -46,6 +46,22 @@ export interface BuiltFaceLabel {
 
 export type AccessoryKind = 'bracket' | 'structural_flange' | 'lcct_frame' | 'lcct_mesh' | 'end_cap';
 
+export interface AccessoryKinematics {
+  endSign: 1 | -1;
+  /** Radial direction for corner brackets [sx, sy] */
+  radialDir: [number, number];
+  /** Radial shift (mm) at 100% explode */
+  explodeRadialMm: number;
+  /** Axial shift (mm) at 100% explode */
+  explodeAxialMm: number;
+  /** Extra axial shift (mm) when Chưa gò mí (unseamed) */
+  unseamedAxialMm: number;
+  /** Radial shift (mm) during 0->30% 3D unfold retraction */
+  unfoldRadialMm: number;
+  /** Axial shift (mm) during 0->30% 3D unfold retraction */
+  unfoldAxialMm: number;
+}
+
 export interface BuiltAccessoryMesh {
   id: string;
   kind: AccessoryKind;
@@ -55,6 +71,7 @@ export interface BuiltAccessoryMesh {
   edgesGeometry: THREE.EdgesGeometry | null;
   offset: [number, number, number]; // meters
   faceLabels?: BuiltFaceLabel[];
+  kinematics?: AccessoryKinematics;
 }
 
 interface ZoneBuf {
@@ -637,7 +654,8 @@ export function appendPieceIntegralEndFlanges(
 
 /**
  * Builds 4 stamped 3D TDC/TDF corner brackets with real 3D teardrop bolt holes
- * sliding cleanly inside the hollow C-box channels.
+ * (pointed tip facing INWARD toward duct corner, round arc facing OUTWARD per ke_góc_đã_đóng_nhìn_mặt_trước.jpg)
+ * and chamfered insertion leg tips (per ke_góc_1.jpg) sliding cleanly inside the hollow C-box channels.
  */
 function buildTdcCornerBrackets(
   endKey: 'c1' | 'c2',
@@ -661,30 +679,33 @@ function buildTdcCornerBrackets(
   const legInner = Math.max(3.5, t + gap + 2.5);
   const legOuter = Math.min(sqSize - 3.5, 21.5);
   const startOff = t + gap + 0.3;
+  const legChamfer = Math.min(5.5, (legOuter - legInner) * 0.42, legLen * 0.25);
 
   const lShape = new THREE.Shape();
   lShape.moveTo(startOff + legInner, -legLen);
-  lShape.lineTo(startOff + legOuter, -legLen);
+  lShape.lineTo(startOff + legOuter - legChamfer, -legLen);
+  lShape.lineTo(startOff + legOuter, -legLen + legChamfer);
   lShape.lineTo(startOff + legOuter, startOff);
   lShape.lineTo(startOff + sqSize, startOff);
   lShape.lineTo(startOff + sqSize, startOff + sqSize);
   lShape.lineTo(startOff, startOff + sqSize);
   lShape.lineTo(startOff, startOff + legOuter);
-  lShape.lineTo(-legLen, startOff + legOuter);
+  lShape.lineTo(-legLen + legChamfer, startOff + legOuter);
+  lShape.lineTo(-legLen, startOff + legOuter - legChamfer);
   lShape.lineTo(-legLen, startOff + legInner);
   lShape.lineTo(startOff, startOff + legInner);
   lShape.lineTo(startOff, startOff);
   lShape.lineTo(startOff + legInner, startOff);
   lShape.closePath();
 
-  // Authentic teardrop bolt hole centered in the corner square
-  const cx = startOff + sqSize * 0.45;
-  const cy = startOff + sqSize * 0.45;
-  const rBig = Math.min(5.0, sqSize * 0.19);
-  const rTip = rBig * 0.44;
-  const tipDist = rBig * 1.65;
+  // Authentic teardrop bolt hole: ROUND lobe facing OUTWARD (+1, +1), POINTED tip facing INWARD (-1, -1) toward duct corner!
+  const cx = startOff + sqSize * 0.56;
+  const cy = startOff + sqSize * 0.56;
+  const rBig = Math.min(5.2, sqSize * 0.2);
+  const rTip = rBig * 0.36;
+  const tipDist = rBig * 1.68;
   const hole = new THREE.Path();
-  const dirAngle = Math.PI / 4;
+  const dirAngle = -3 * Math.PI / 4; // Pointed V-tip aims straight toward inner duct corner (0, 0)
   const startA = dirAngle + Math.PI * 0.36;
   const endA = dirAngle + Math.PI * 1.64;
   const steps = 20;
@@ -699,7 +720,7 @@ function buildTdcCornerBrackets(
   const tipCy = cy + Math.sin(dirAngle) * tipDist;
   const tipSteps = 10;
   for (let i = 0; i <= tipSteps; i++) {
-    const a = dirAngle - Math.PI * 0.48 + (Math.PI * 0.96 * i) / tipSteps;
+    const a = dirAngle - Math.PI * 0.45 + (Math.PI * 0.9 * i) / tipSteps;
     hole.lineTo(tipCx + Math.cos(a) * rTip, tipCy + Math.sin(a) * rTip);
   }
   hole.closePath();
@@ -712,7 +733,8 @@ function buildTdcCornerBrackets(
     { id: 'BL', sx: -1, sy: -1 },
   ];
 
-  const diagShiftMm = explodeRatio * Math.max(70, Math.min(130, Math.min(W, H) * 0.24));
+  const maxDiagMm = Math.max(70, Math.min(130, Math.min(W, H) * 0.24));
+  const diagShiftMm = explodeRatio * maxDiagMm;
   const axialShiftMm = explodeRatio * 48;
 
   return corners.map((c) => {
@@ -762,6 +784,7 @@ function buildTdcCornerBrackets(
     return {
       id: `${endKey}-tdc-bracket-${c.id}`,
       kind: 'bracket',
+      endKey,
       geometry: geom,
       edgesGeometry: new THREE.EdgesGeometry(geom, 24),
       offset: [
@@ -769,6 +792,15 @@ function buildTdcCornerBrackets(
         c.sy * diagShiftMm * MM_TO_M,
         endSign * axialShiftMm * MM_TO_M,
       ],
+      kinematics: {
+        endSign,
+        radialDir: [c.sx, c.sy],
+        explodeRadialMm: maxDiagMm,
+        explodeAxialMm: 48,
+        unseamedAxialMm: 0,
+        unfoldRadialMm: 62,
+        unfoldAxialMm: Math.max(190, Math.min(320, Math.max(W, H) * 0.36)),
+      },
     };
   });
 }
@@ -1022,14 +1054,25 @@ function buildBichVFrame(
   geom.computeBoundingBox();
   geom.computeBoundingSphere();
 
-  const axShiftMm = explodeRatio * Math.max(125, Math.min(230, Math.max(W, H) * 0.28));
+  const maxAxV = Math.max(125, Math.min(230, Math.max(W, H) * 0.28));
+  const axShiftMm = explodeRatio * maxAxV;
 
   return {
     id: `${endKey}-bich-v-frame`,
     kind: 'structural_flange',
+    endKey,
     geometry: geom,
     edgesGeometry: new THREE.EdgesGeometry(geom, 20),
     offset: [0, 0, endSign * axShiftMm * MM_TO_M],
+    kinematics: {
+      endSign,
+      radialDir: [0, 0],
+      explodeRadialMm: 0,
+      explodeAxialMm: maxAxV,
+      unseamedAxialMm: 0,
+      unfoldRadialMm: 0,
+      unfoldAxialMm: Math.max(210, Math.min(360, Math.max(W, H) * 0.44)),
+    },
   };
 }
 
@@ -1096,14 +1139,25 @@ function buildBichUFrame(
   geom.computeBoundingBox();
   geom.computeBoundingSphere();
 
-  const axShiftMm = explodeRatio * Math.max(125, Math.min(230, Math.max(W, H) * 0.28));
+  const maxAxU = Math.max(125, Math.min(230, Math.max(W, H) * 0.28));
+  const axShiftMm = explodeRatio * maxAxU;
 
   return {
     id: `${endKey}-bich-u-frame`,
     kind: 'structural_flange',
+    endKey,
     geometry: geom,
     edgesGeometry: new THREE.EdgesGeometry(geom, 20),
     offset: [0, 0, endSign * axShiftMm * MM_TO_M],
+    kinematics: {
+      endSign,
+      radialDir: [0, 0],
+      explodeRadialMm: 0,
+      explodeAxialMm: maxAxU,
+      unseamedAxialMm: 0,
+      unfoldRadialMm: 0,
+      unfoldAxialMm: Math.max(210, Math.min(360, Math.max(W, H) * 0.44)),
+    },
   };
 }
 
@@ -1128,8 +1182,18 @@ function buildLcctScreen(
   const zBack = zFront - endSign * frameDepth;
   const zCenter = (zFront + zBack) * 0.5;
 
-  const axShiftMm = explodeRatio * Math.max(135, Math.min(240, Math.max(W, H) * 0.3));
+  const maxAxLcct = Math.max(135, Math.min(240, Math.max(W, H) * 0.3));
+  const axShiftMm = explodeRatio * maxAxLcct;
   const offset: [number, number, number] = [0, 0, endSign * axShiftMm * MM_TO_M];
+  const lcctKinematics: AccessoryKinematics = {
+    endSign,
+    radialDir: [0, 0],
+    explodeRadialMm: 0,
+    explodeAxialMm: maxAxLcct,
+    unseamedAxialMm: 0,
+    unfoldRadialMm: 0,
+    unfoldAxialMm: Math.max(210, Math.min(360, Math.max(W, H) * 0.44)),
+  };
 
   const zb: ZoneBuf = { positions: [], uvs: [] };
   const hOW = outerW / 2, hOH = outerH / 2;
@@ -1183,23 +1247,27 @@ function buildLcctScreen(
     {
       id: `${endKey}-lcct-frame`,
       kind: 'lcct_frame',
+      endKey,
       geometry: mergedFrame,
       edgesGeometry: new THREE.EdgesGeometry(mergedFrame, 22),
       offset,
+      kinematics: lcctKinematics,
     },
     {
       id: `${endKey}-lcct-mesh`,
       kind: 'lcct_mesh',
+      endKey,
       geometry: meshGeom,
       edgesGeometry: null,
       offset,
+      kinematics: lcctKinematics,
     },
   ];
 }
 
 /**
  * Builds removable End Cap panel (`1-B`, `1-E`, `1-F`...):
- * - Flat sheet cover with optional straight embossed ribs (synced to stiffenerRibs, NO X-ribs!)
+ * - Flat sheet cover with optional straight embossed ribs (synced to stiffenerRibs & ribPitchMm, NO X-ribs!)
  * - Per-edge configurable seam: Mí đơn (+7 mm vát 45°), Hàn chập (7–25 mm gập ôm ngoài), hoặc Hàn đấu đầu (0–0)
  * - Stamped inner-face partCode label facing into the duct interior!
  */
@@ -1209,7 +1277,8 @@ function buildEndCapPanel(
   conn: EndConnectionConfig,
   config: DuctConfig,
   seamLockProgress: number,
-  explodeRatio: number
+  explodeRatio: number,
+  ribPitchMm = 210
 ): BuiltAccessoryMesh {
   const { W, H, L, thickness: t, stiffenerRibs } = config;
   const gap = Math.max(0.24, t * 0.28);
@@ -1239,11 +1308,11 @@ function buildEndCapPanel(
     5: { positions: [], uvs: [] },
   };
 
-  // Straight parallel embossed stiffener ribs on End Cap (exact fixed 210 mm pitch, NEVER X-ribs)
+  // Straight parallel embossed stiffener ribs on End Cap (configurable ribPitchMm, NEVER X-ribs)
   const ribAlongX = W >= H;
   const spanPerp = ribAlongX ? capH : capW;
   const spanAlong = ribAlongX ? capW : capH;
-  const ribCenters = computeRibLayout(spanPerp, stiffenerRibs).zPositionsMm;
+  const ribCenters = computeRibLayout(spanPerp, stiffenerRibs, ribPitchMm).zPositionsMm;
 
   const smoothstep = (e0: number, e1: number, x: number) => {
     const u = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
@@ -1367,8 +1436,10 @@ function buildEndCapPanel(
   }
 
   const geom = buildGeometryFromZones(zoneBuffers);
-  const unseamedShift = (1 - seamLockProgress) * (hasAnyPitts ? 13.5 : 8.5);
-  const explodeShift = explodeRatio * Math.max(135, Math.min(260, Math.max(W, H) * 0.34));
+  const maxUnseamedMm = hasAnyPitts ? 13.5 : 8.5;
+  const maxExplodeMm = Math.max(135, Math.min(260, Math.max(W, H) * 0.34));
+  const unseamedShift = (1 - seamLockProgress) * maxUnseamedMm;
+  const explodeShift = explodeRatio * maxExplodeMm;
 
   // Inner-face marking (`1-B`, `1-E`, `1-F`...) stamped cleanly on the INSIDE of the End Cap
   const labelW = Math.max(60, Math.min(180, Math.min(W, H) * 0.42));
@@ -1392,6 +1463,15 @@ function buildEndCapPanel(
     edgesGeometry: new THREE.EdgesGeometry(geom, 22),
     offset: [0, 0, endSign * (unseamedShift + explodeShift) * MM_TO_M],
     faceLabels: [faceLabel],
+    kinematics: {
+      endSign,
+      radialDir: [0, 0],
+      explodeRadialMm: 0,
+      explodeAxialMm: maxExplodeMm,
+      unseamedAxialMm: maxUnseamedMm,
+      unfoldRadialMm: 0,
+      unfoldAxialMm: Math.max(220, Math.min(380, Math.max(W, H) * 0.46)),
+    },
   };
 }
 
@@ -1402,7 +1482,8 @@ function buildEndCapPanel(
 export function buildAllEndAccessories(
   config: DuctConfig,
   seamLockProgress: number,
-  explodeRatio: number
+  explodeRatio: number,
+  ribPitchMm = 210
 ): BuiltAccessoryMesh[] {
   const { W, H, L, thickness: t, c1, c2 } = config;
   const accessories: BuiltAccessoryMesh[] = [];
@@ -1430,7 +1511,9 @@ export function buildAllEndAccessories(
         }
         break;
       case 'end_cap':
-        accessories.push(buildEndCapPanel(key, endSign, conn, config, seamLockProgress, explodeRatio));
+        accessories.push(
+          buildEndCapPanel(key, endSign, conn, config, seamLockProgress, explodeRatio, ribPitchMm)
+        );
         break;
       case 'nep_c':
       case 'plain':

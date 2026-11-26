@@ -1,24 +1,26 @@
 import { Box, Crosshair, Eye, PanelLeftOpen, RotateCcw, Square, X } from 'lucide-react';
-import { SHEET_MATERIAL_LABELS, SPLIT_MODE_LABELS } from '../domain/ductRules';
+import { CORNER_LABELS, SHEET_MATERIAL_LABELS, SPLIT_MODE_LABELS } from '../domain/ductRules';
 import { END_CONNECTION_SHORT_LABELS } from '../domain/endConnectionRules';
-import type { CameraPreset, DuctConfig } from '../types/duct';
+import type { CameraPreset, DuctConfig, SelectionTarget } from '../types/duct';
 
 interface ViewportOverlaysProps {
   config: DuctConfig;
   sidebarOpen: boolean;
-  selectedPartCode: string | null;
+  selection: SelectionTarget;
   onClearSelection: () => void;
   onExpandSidebar: () => void;
   onCameraPreset: (preset: CameraPreset) => void;
+  compact?: boolean;
 }
 
 export function ViewportOverlays({
   config,
   sidebarOpen,
-  selectedPartCode,
+  selection,
   onClearSelection,
   onExpandSidebar,
   onCameraPreset,
+  compact = false,
 }: ViewportOverlaysProps) {
   const isTech = config.materialMode === 'technical';
   const matLabel = SHEET_MATERIAL_LABELS[config.sheetMaterial];
@@ -27,9 +29,17 @@ export function ViewportOverlays({
   const endsSummary =
     c1Label === c2Label ? `2× ${c1Label}` : `C1: ${c1Label} • C2: ${c2Label}`;
 
+  const pillText = selection
+    ? selection.kind === 'piece'
+      ? { prefix: 'Đang chọn mảnh:', code: selection.partCode }
+      : selection.kind === 'end'
+        ? { prefix: 'Đang chọn đầu:', code: selection.endKey.toUpperCase() }
+        : { prefix: 'Đang chọn mí:', code: CORNER_LABELS[selection.cornerId] }
+    : null;
+
   return (
     <>
-      {/* Top-Left Floating Expand Button & Selected Part Pill */}
+      {/* Top-Left Floating Expand Button & Selected Target Pill */}
       <div className="absolute top-3 left-3 z-20 flex items-center gap-2">
         {!sidebarOpen && (
           <button
@@ -44,17 +54,17 @@ export function ViewportOverlays({
           </button>
         )}
 
-        {selectedPartCode && (
+        {pillText && (
           <div
             id="pill-selected-part"
             className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/55 bg-sky-500/18 px-2.5 py-1 text-xs font-medium text-sky-100 shadow-lg backdrop-blur-md"
           >
-            <span>Đang chọn mảnh:</span>
-            <strong className="font-mono font-bold text-white">{selectedPartCode}</strong>
+            <span>{pillText.prefix}</span>
+            <strong className="font-mono font-bold text-white">{pillText.code}</strong>
             <button
               type="button"
               onClick={onClearSelection}
-              aria-label="Bỏ chọn mảnh"
+              aria-label="Bỏ chọn"
               className="ml-0.5 rounded p-0.5 text-sky-200 hover:bg-sky-400/25 hover:text-white"
             >
               <X className="h-3.5 w-3.5" />
@@ -64,33 +74,33 @@ export function ViewportOverlays({
       </div>
 
       {/* Bottom-Left: Compact Status Pill / Technical Color Legend */}
-      <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex flex-col gap-1.5">
+      <div className={`pointer-events-none absolute bottom-3 left-3 z-10 flex flex-col gap-1.5 ${compact ? 'max-w-[58%]' : ''}`}>
         {isTech && (
-          <div className="pointer-events-auto flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-[#253247] bg-[#0e141e]/90 px-3 py-1.5 text-[11px] text-slate-200 backdrop-blur-md">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-xs bg-[#e13f3f]" />
+          <div className="pointer-events-auto flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-lg border border-[#253247] bg-[#0e141e]/90 px-2.5 py-1 text-[10.5px] text-slate-200 backdrop-blur-md">
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-xs bg-[#e13f3f]" />
               <span>Mí kép (+31)</span>
             </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-xs bg-[#2f7cf6]" />
-              <span>Mí đơn (+7, vát 45°)</span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-xs bg-[#2f7cf6]" />
+              <span>Mí đơn (+7)</span>
             </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-xs bg-[#eab308]" />
-              <span>Bích / Đầu nối</span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-xs bg-[#eab308]" />
+              <span>Bích</span>
             </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-xs bg-[#22c55e]" />
-              <span>Đường chấn 90°</span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-xs bg-[#22c55e]" />
+              <span>Chấn 90°</span>
             </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-xs bg-[#f59e0b]" />
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-xs bg-[#f59e0b]" />
               <span>Mí hàn</span>
             </span>
           </div>
         )}
 
-        <div className="inline-flex w-fit flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg border border-[#222e40] bg-[#0e141e]/80 px-2.5 py-1 font-mono text-[11px] text-slate-300 backdrop-blur-md">
+        <div className="inline-flex w-fit flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg border border-[#222e40] bg-[#0e141e]/80 px-2.5 py-1 font-mono text-[10.5px] text-slate-300 backdrop-blur-md">
           <span className="font-semibold text-sky-300">
             {config.W} × {config.H} × L{config.L} mm
           </span>
@@ -98,18 +108,22 @@ export function ViewportOverlays({
           <span className="font-sans text-slate-200">
             {matLabel} <span className="font-mono">{config.thickness}</span> mm
           </span>
-          <span className="text-slate-600">|</span>
-          <span className="font-sans text-amber-200/90">{endsSummary}</span>
-          <span className="text-slate-600">|</span>
-          <span className="font-sans text-slate-300">{SPLIT_MODE_LABELS[config.splitMode]}</span>
-          <span className="text-slate-600">|</span>
-          <span
-            className={`font-sans font-medium ${
-              config.seamState === 'seamed' ? 'text-emerald-300' : 'text-amber-300'
-            }`}
-          >
-            {config.seamState === 'seamed' ? 'Đã gò mí' : 'Chưa gò mí'}
-          </span>
+          {!compact && (
+            <>
+              <span className="text-slate-600">|</span>
+              <span className="font-sans text-amber-200/90">{endsSummary}</span>
+              <span className="text-slate-600">|</span>
+              <span className="font-sans text-slate-300">{SPLIT_MODE_LABELS[config.splitMode]}</span>
+              <span className="text-slate-600">|</span>
+              <span
+                className={`font-sans font-medium ${
+                  config.seamState === 'seamed' ? 'text-emerald-300' : 'text-amber-300'
+                }`}
+              >
+                {config.seamState === 'seamed' ? 'Đã gò mí' : 'Chưa gò mí'}
+              </span>
+            </>
+          )}
         </div>
       </div>
 
@@ -127,7 +141,7 @@ export function ViewportOverlays({
           title="Góc nhìn phối cảnh 3/4"
         >
           <Box className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Phối cảnh</span>
+          {!compact && <span className="hidden sm:inline">Phối cảnh</span>}
         </button>
         <button
           id="cam-seam-closeup"
@@ -137,7 +151,7 @@ export function ViewportOverlays({
           title="Phóng cận cảnh mặt cắt góc mí ghép"
         >
           <Crosshair className="h-3.5 w-3.5" />
-          <span>Soi góc mí</span>
+          <span>{compact ? 'Soi mí' : 'Soi góc mí'}</span>
         </button>
         <button
           id="cam-front"
@@ -147,7 +161,7 @@ export function ViewportOverlays({
           title="Nhìn trực diện tiết diện lòng ống"
         >
           <Square className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Mặt cắt</span>
+          {!compact && <span className="hidden sm:inline">Mặt cắt</span>}
         </button>
         <button
           id="cam-top"
@@ -157,7 +171,7 @@ export function ViewportOverlays({
           title="Nhìn từ trên xuống"
         >
           <Eye className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Mặt bằng</span>
+          {!compact && <span className="hidden sm:inline">Mặt bằng</span>}
         </button>
         <button
           id="cam-reset"

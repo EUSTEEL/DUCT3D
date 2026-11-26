@@ -2,26 +2,31 @@ import { AlertTriangle, CheckCircle2, Info, Ruler } from 'lucide-react';
 import {
   calculateBlankAnalysis,
   evaluateSplitForConfig,
-  getSheetStandardWidth,
   SHEET_MATERIAL_LABELS,
   SPLIT_MODE_LABELS,
 } from '../domain/ductRules';
 import { getEndAllowanceLabel, getEndAllowanceMm } from '../domain/endConnectionRules';
-import type { DuctConfig } from '../types/duct';
+import { getActiveSheetDimensions } from '../domain/workshopSettings';
+import type { DuctConfig, WorkshopSettings } from '../types/duct';
 
 interface BlankAnalysisTabProps {
   config: DuctConfig;
+  workshopSettings: WorkshopSettings;
   selectedPartCode: string | null;
   onSelectPart: (partCode: string | null) => void;
 }
 
 export function BlankAnalysisTab({
   config,
+  workshopSettings,
   selectedPartCode,
   onSelectPart,
 }: BlankAnalysisTabProps) {
-  const pieces = calculateBlankAnalysis(config);
-  const sheetWidth = getSheetStandardWidth(config.sheetMaterial);
+  const pieces = calculateBlankAnalysis(config, workshopSettings);
+  const { widthMm: sheetWidth, lengthMm: sheetLength } = getActiveSheetDimensions(
+    config.sheetMaterial,
+    workshopSettings
+  );
   const matLabel = SHEET_MATERIAL_LABELS[config.sheetMaterial];
   const rec = evaluateSplitForConfig(
     config.W,
@@ -29,7 +34,8 @@ export function BlankAnalysisTab({
     config.L,
     config.sheetMaterial,
     config.c1,
-    config.c2
+    config.c2,
+    workshopSettings
   );
 
   const c1Allow = getEndAllowanceMm(config.c1);
@@ -38,11 +44,15 @@ export function BlankAnalysisTab({
 
   const totalArea = pieces.reduce((sum, p) => sum + p.areaM2, 0);
   const anyExceeds = pieces.some((p) => p.cutOrientation === 'can_noi_c');
+  const anyRollFormer =
+    config.stiffenerRibs &&
+    config.L >= 220 &&
+    pieces.some((p) => !p.isEndCap && p.blankLength > workshopSettings.rollFormerLimitMm);
   const endCapCount = pieces.filter((p) => p.isEndCap).length;
 
   return (
     <div className="space-y-4 pb-5">
-      {/* KPI Summary: Tổng diện tích phôi + Khổ vật liệu chuẩn (1200 / 1250 mm) — KHÔNG tính kg */}
+      {/* KPI Summary: Tổng diện tích phôi + Khổ vật liệu chuẩn — KHÔNG tính kg */}
       <section className="grid grid-cols-2 gap-2">
         <div className="rounded-lg border border-[#232e40] bg-[#151c27] p-2.5">
           <div className="text-[10px] font-medium text-slate-400 uppercase">
@@ -65,12 +75,12 @@ export function BlankAnalysisTab({
           className="rounded-lg border border-[#232e40] bg-[#151c27] p-2.5"
         >
           <div className="text-[10px] font-medium text-slate-400 uppercase">
-            Khổ vật liệu chuẩn
+            Khổ tấm chuẩn
           </div>
-          <div className="mt-0.5 font-mono text-base font-semibold tabular-nums text-slate-100">
-            {sheetWidth} <span className="text-xs font-normal text-slate-400">mm</span>
+          <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-slate-100">
+            {sheetWidth}×{sheetLength}
           </div>
-          <div className="mt-0.5 truncate text-[10px] text-slate-400">{matLabel}</div>
+          <div className="mt-0.5 truncate text-[10px] text-slate-400">{matLabel} (mm)</div>
         </div>
       </section>
 
@@ -81,7 +91,7 @@ export function BlankAnalysisTab({
           <span
             id="kpi-blank-length"
             className={`font-mono text-xs font-bold tabular-nums ${
-              blankLength > sheetWidth ? 'text-amber-300' : 'text-sky-300'
+              anyExceeds ? 'text-red-300' : anyRollFormer ? 'text-amber-300' : 'text-sky-300'
             }`}
           >
             {blankLength} mm
@@ -103,36 +113,45 @@ export function BlankAnalysisTab({
         </div>
       </section>
 
-      {/* Sheet Standard Status */}
+      {/* Sheet Standard Status (allows 0° or 90° rotation) */}
       <section className="space-y-2">
         <h2 className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
-          Kiểm tra quy chuẩn khổ {sheetWidth} mm
+          Kiểm tra khổ tấm {sheetWidth}×{sheetLength} mm
         </h2>
         <div
+          id="sheet-limit-summary"
           className={`rounded-lg border p-2.5 text-[11px] leading-relaxed ${
             anyExceeds
-              ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
-              : 'border-emerald-500/35 bg-emerald-500/10 text-emerald-200'
+              ? 'border-red-500/45 bg-red-500/10 text-red-200'
+              : anyRollFormer
+                ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                : 'border-emerald-500/35 bg-emerald-500/10 text-emerald-200'
           }`}
         >
           <div className="flex items-start gap-2">
-            {anyExceeds ? (
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+            {anyExceeds || anyRollFormer ? (
+              <AlertTriangle
+                className={`mt-0.5 h-4 w-4 shrink-0 ${
+                  anyExceeds ? 'text-red-400' : 'text-amber-400'
+                }`}
+              />
             ) : (
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
             )}
             <div>
               <div className="font-semibold">
                 {anyExceeds
-                  ? `Có mảnh vượt khổ vật liệu chuẩn ${sheetWidth} mm`
-                  : `Tất cả ${pieces.length} mảnh tối ưu trên tấm 6000 × ${sheetWidth} mm`}
+                  ? `Có mảnh vượt khổ tấm ${sheetWidth}×${sheetLength} mm`
+                  : anyRollFormer
+                    ? `Đạt khổ tấm, nhưng L phôi vượt khổ máy lăn gân ${workshopSettings.rollFormerLimitMm} mm`
+                    : `Đạt — Tất cả ${pieces.length} mảnh lọt tấm ${sheetWidth}×${sheetLength} mm`}
               </div>
               <div className="mt-0.5 text-slate-300">
                 Kiểu chia hiện tại: <strong>{SPLIT_MODE_LABELS[config.splitMode]}</strong>
                 {config.splitMode !== rec.recommended && (
-                  <span className="text-amber-300">
+                  <span className="text-sky-300">
                     {' '}
-                    (Hệ thống đề xuất: {SPLIT_MODE_LABELS[rec.recommended]})
+                    (Đề xuất: {SPLIT_MODE_LABELS[rec.recommended]})
                   </span>
                 )}
               </div>
@@ -258,10 +277,8 @@ export function BlankAnalysisTab({
                 <div
                   className={`mt-2 rounded px-2 py-1 text-[10px] font-medium ${
                     p.cutOrientation === 'can_noi_c'
-                      ? 'bg-amber-500/15 text-amber-300'
-                      : p.cutOrientation === 'doc_6000'
-                        ? 'bg-sky-500/15 text-sky-300'
-                        : 'bg-emerald-500/12 text-emerald-300'
+                      ? 'bg-red-500/15 text-red-200'
+                      : 'bg-emerald-500/12 text-emerald-300'
                   }`}
                 >
                   {p.cutNote}

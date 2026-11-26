@@ -119,6 +119,7 @@ export interface DuctConfig {
   c2: EndConnectionConfig; // Đầu C2 (z = -L/2, hướng phía sau)
   seamState: SeamState; // Chưa gò mí ↔ Đã gò mí
   explode: number; // 0 to 100 (%)
+  unfoldProgress: number; // 0 (Gập thành phẩm) to 100 (Mở phẳng phôi 3D)
   stiffenerRibs: boolean; // Gân tăng cứng thẳng
   showFaceLabels: boolean; // Nhãn mặt đánh dấu trong lòng ống (1-A, 1-B, 1-C...) — mặc định BẬT
   materialMode: MaterialMode; // Vật liệu thật (Tôn Mạ Kẽm / Inox) ↔ Tô màu kỹ thuật
@@ -134,6 +135,27 @@ export interface ResolvedCornerSeam {
   isOverridden: boolean;
 }
 
+export interface WorkshopSettings {
+  rollFormerLimitMm: number; // Khổ máy lăn gân tối đa (mặc định 1900 mm)
+  ribPitchMm: number; // Khoảng cách bước gân tăng cứng (mặc định 210 mm)
+  galvanizedSheetW: number; // Khổ rộng tấm chuẩn Tôn Mạ Kẽm (mặc định 1200 mm)
+  galvanizedSheetL: number; // Khổ dài tấm chuẩn Tôn Mạ Kẽm (mặc định 6000 mm)
+  inoxSheetW: number; // Khổ rộng tấm chuẩn Inox (mặc định 1250 mm)
+  inoxSheetL: number; // Khổ dài tấm chuẩn Inox (mặc định 6000 mm)
+}
+
+export type SelectionTarget =
+  | { kind: 'piece'; partCode: string }
+  | { kind: 'end'; endKey: 'c1' | 'c2' }
+  | { kind: 'seam'; cornerId: CornerId }
+  | null;
+
+export interface ContextMenuState {
+  x: number;
+  y: number;
+  target: NonNullable<SelectionTarget>;
+}
+
 export interface SplitRecommendation {
   recommended: SplitMode;
   reason: string;
@@ -143,6 +165,7 @@ export interface SplitRecommendation {
   c1Allowance: number;
   c2Allowance: number;
   sheetStandardWidth: number;
+  sheetStandardLength: number;
   rotateLongitudinal: boolean;
   exceedsSheetWidth: boolean;
 }
@@ -181,6 +204,7 @@ export interface RibLayout {
   zPositionsMm: number[];
 }
 
-export type CameraPreset = 'iso' | 'seam_closeup' | 'front_section' | 'top' | 'reset';
+export type CameraPreset = 'iso' | 'seam_closeup' | 'front_section' | 'top' | 'reset' | 'focus_part';
 
 export type SidebarTab = 'params' | 'lsx' | 'blank';
+export type ViewportMode = '3d' | '2d' | 'split';

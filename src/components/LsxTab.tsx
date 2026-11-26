@@ -6,10 +6,16 @@ import {
   parseStraightDuctLsx,
 } from '../domain/ductRules';
 import { createDefaultEndConnection } from '../domain/endConnectionRules';
-import type { DuctConfig, SheetMaterialType, SheetThickness } from '../types/duct';
+import type {
+  DuctConfig,
+  SheetMaterialType,
+  SheetThickness,
+  WorkshopSettings,
+} from '../types/duct';
 
 interface LsxTabProps {
   config: DuctConfig;
+  workshopSettings: WorkshopSettings;
   onApplyConfig: (patch: Partial<DuctConfig>) => void;
 }
 
@@ -21,7 +27,7 @@ const SAMPLE_LSX_LINES = [
   'Ống gió KT: 600x350, L950, tôn 0.75, 1 đầu bích TDC, 1 đầu để thẳng +40',
 ];
 
-export function LsxTab({ config, onApplyConfig }: LsxTabProps) {
+export function LsxTab({ config, workshopSettings, onApplyConfig }: LsxTabProps) {
   const [lsxText, setLsxText] = useState(SAMPLE_LSX_LINES[0]);
   const [parseFeedback, setParseFeedback] = useState<string[] | null>(null);
   const [jsonInput, setJsonInput] = useState('');
@@ -52,7 +58,15 @@ export function LsxTab({ config, onApplyConfig }: LsxTabProps) {
     const nextT: SheetThickness = parsed.thickness
       ? parsed.thickness
       : normalizeThicknessForMaterial(config.thickness, nextMat);
-    const rec = evaluateSplitForConfig(nextW, nextH, nextL, nextMat, nextC1, nextC2);
+    const rec = evaluateSplitForConfig(
+      nextW,
+      nextH,
+      nextL,
+      nextMat,
+      nextC1,
+      nextC2,
+      workshopSettings
+    );
 
     onApplyConfig({
       W: nextW,

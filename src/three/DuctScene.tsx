@@ -1,22 +1,26 @@
-import { useEffect, useRef } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { useCallback, useEffect, useRef } from 'react';
+import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Environment, Grid, Lightformer, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { MM_TO_M } from '../domain/sheetProfileBuilder';
-import type { CameraPreset, DuctConfig } from '../types/duct';
+import type { CameraPreset, DuctConfig, SelectionTarget } from '../types/duct';
 import { DuctAssembly } from './DuctAssembly';
 
-interface CameraCommand {
+export interface CameraCommand {
   preset: CameraPreset;
   seq: number;
+  focusPartCode?: string;
 }
 
 interface DuctSceneProps {
   config: DuctConfig;
+  ribPitchMm: number;
   cameraCommand: CameraCommand;
-  selectedPartCode: string | null;
-  onSelectPart: (partCode: string | null) => void;
+  selection: SelectionTarget;
+  active?: boolean;
+  onSelectTarget: (target: SelectionTarget) => void;
+  onOpenContextMenu: (x: number, y: number, target: NonNullable<SelectionTarget>) => void;
 }
 
 interface CameraControllerProps {
@@ -29,17 +33,21 @@ function computePresetPose(
   W: number,
   H: number,
   L: number,
-  explode: number
+  explode: number,
+  unfoldProgress: number
 ): { pos: THREE.Vector3; target: THREE.Vector3 } {
   const wM = W * MM_TO_M;
   const hM = H * MM_TO_M;
   const lM = L * MM_TO_M;
-  const flangePad = 0.08;
+  const uRatio = unfoldProgress / 100;
+  const flatWidthM = (2 * (W + H) + 450) * MM_TO_M;
+  const effWM = wM * (1 - uRatio) + flatWidthM * uRatio;
+  const flangePad = 0.08 + uRatio * 0.25;
   const explodePad = (explode / 100) * Math.min(0.45, Math.max(wM, hM) * 0.48);
-  const explodeAxialPad = (explode / 100) * 0.34;
+  const explodeAxialPad = (explode / 100) * 0.34 + uRatio * 0.3;
   const diag = Math.max(
     0.48,
-    Math.hypot(wM + flangePad + explodePad, hM + flangePad + explodePad, lM + explodeAxialPad)
+    Math.hypot(effWM + flangePad + explodePad, hM + flangePad + explodePad, lM + explodeAxialPad)
   );
 
   switch (preset) {
@@ -60,14 +68,14 @@ function computePresetPose(
       };
     }
     case 'front_section': {
-      const dist = Math.max(wM + explodePad, hM + explodePad) * 1.55 + lM * 0.55;
+      const dist = Math.max(effWM + explodePad, hM + explodePad) * 1.55 + lM * 0.55;
       return {
         target: new THREE.Vector3(0, 0, 0),
         pos: new THREE.Vector3(0.04 * diag, 0.03 * diag, dist),
       };
     }
     case 'top': {
-      const dist = Math.max(wM + explodePad, lM) * 1.48 + (hM + explodePad) * 0.6;
+      const dist = Math.max(effWM + explodePad, lM + explodeAxialPad) * 1.38 + (hM + explodePad) * 0.4;
       return {
         target: new THREE.Vector3(0, 0, 0),
         pos: new THREE.Vector3(0.02, dist, 0.14 * diag),
@@ -77,17 +85,17 @@ function computePresetPose(
     case 'reset':
     default: {
       // Classic hero 3/4 industrial angle highlighting Top-Right seam, front opening, and side ribs
-      const d = diag * 1.18;
+      const d = diag * (1.18 - uRatio * 0.08);
       return {
         target: new THREE.Vector3(0, 0, 0),
-        pos: new THREE.Vector3(d * 0.68, d * 0.44, d * 0.88),
+        pos: new THREE.Vector3(d * (0.68 - uRatio * 0.32), d * (0.44 + uRatio * 0.42), d * (0.88 - uRatio * 0.12)),
       };
     }
   }
 }
 
 function CameraRig({ config, cameraCommand }: CameraControllerProps) {
-  const { camera } = useThree();
+  const { camera, scene } = useThree();
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const animRef = useRef<{
     active: boolean;
@@ -100,18 +108,30 @@ function CameraRig({ config, cameraCommand }: CameraControllerProps) {
   });
 
   const initializedRef = useRef(false);
-  const dimsRef = useRef({ W: config.W, H: config.H, L: config.L, explode: config.explode });
+  const dimsRef = useRef({
+    W: config.W,
+    H: config.H,
+    L: config.L,
+    explode: config.explode,
+    unfoldProgress: config.unfoldProgress,
+  });
 
   useEffect(() => {
-    dimsRef.current = { W: config.W, H: config.H, L: config.L, explode: config.explode };
-  }, [config.W, config.H, config.L, config.explode]);
+    dimsRef.current = {
+      W: config.W,
+      H: config.H,
+      L: config.L,
+      explode: config.explode,
+      unfoldProgress: config.unfoldProgress,
+    };
+  }, [config.W, config.H, config.L, config.explode, config.unfoldProgress]);
 
   // Set initial framing cleanly on first mount
   useEffect(() => {
     if (!initializedRef.current) {
       initializedRef.current = true;
-      const { W, H, L, explode } = dimsRef.current;
-      const pose = computePresetPose('iso', W, H, L, explode);
+      const { W, H, L, explode, unfoldProgress } = dimsRef.current;
+      const pose = computePresetPose('iso', W, H, L, explode, unfoldProgress);
       camera.position.copy(pose.pos);
       camera.lookAt(pose.target);
       if (controlsRef.current) {
@@ -121,17 +141,42 @@ function CameraRig({ config, cameraCommand }: CameraControllerProps) {
     }
   }, [camera]);
 
-  // Trigger smooth camera move when user clicks a preset button or loads a quick duct preset
+  // Trigger smooth camera move when user clicks a preset button or selects "Phóng to mảnh này"
   useEffect(() => {
     if (cameraCommand.seq === 0) return;
-    const { W, H, L, explode } = dimsRef.current;
-    const pose = computePresetPose(cameraCommand.preset, W, H, L, explode);
+
+    if (cameraCommand.preset === 'focus_part' && cameraCommand.focusPartCode) {
+      const obj = scene.getObjectByName(`piece-${cameraCommand.focusPartCode}`);
+      if (obj) {
+        const box = new THREE.Box3().setFromObject(obj);
+        if (!box.isEmpty()) {
+          const center = new THREE.Vector3();
+          const size = new THREE.Vector3();
+          box.getCenter(center);
+          box.getSize(size);
+          const diag = Math.max(0.28, size.length());
+          const dir = camera.position.clone().sub(controlsRef.current?.target ?? center);
+          if (dir.lengthSq() < 1e-4) dir.set(0.65, 0.45, 0.85);
+          dir.normalize();
+          const targetPos = center.clone().addScaledVector(dir, diag * 1.15);
+          animRef.current = {
+            active: true,
+            targetPos,
+            targetLook: center,
+          };
+          return;
+        }
+      }
+    }
+
+    const { W, H, L, explode, unfoldProgress } = dimsRef.current;
+    const pose = computePresetPose(cameraCommand.preset, W, H, L, explode, unfoldProgress);
     animRef.current = {
       active: true,
       targetPos: pose.pos,
       targetLook: pose.target,
     };
-  }, [cameraCommand]);
+  }, [cameraCommand, camera, scene]);
 
   useFrame((_, delta) => {
     if (!animRef.current.active || !controlsRef.current) return;
@@ -162,7 +207,7 @@ function CameraRig({ config, cameraCommand }: CameraControllerProps) {
       enableDamping
       dampingFactor={0.08}
       minDistance={0.04}
-      maxDistance={12}
+      maxDistance={14}
       onStart={stopAnimOnUserDrag}
     />
   );
@@ -170,9 +215,12 @@ function CameraRig({ config, cameraCommand }: CameraControllerProps) {
 
 export function DuctScene({
   config,
+  ribPitchMm,
   cameraCommand,
-  selectedPartCode,
-  onSelectPart,
+  selection,
+  active = true,
+  onSelectTarget,
+  onOpenContextMenu,
 }: DuctSceneProps) {
   const halfHM = (config.H / 2) * MM_TO_M;
   const explodeExtraM =
@@ -181,15 +229,89 @@ export function DuctScene({
       : (config.explode / 100) * Math.min(0.28, Math.max(config.W, config.H) * MM_TO_M * 0.32);
   const floorY = -(halfHM + explodeExtraM + 0.14);
 
-  const shadowExtent = Math.max(2.2, Math.max(config.W, config.H, config.L) * MM_TO_M * 2.2);
+  const unfoldedSpanM = (2 * (config.W + config.H) + 520) * MM_TO_M;
+  const shadowExtent = Math.max(
+    2.4,
+    Math.max(config.W, config.H, config.L) * MM_TO_M * 2.2,
+    (config.unfoldProgress / 100) * unfoldedSpanM * 1.4
+  );
+
+  // Track right-button pointer movement so OrbitControls right-drag Pan still works 100%,
+  // while a crisp stationary right-click (< 4px move) opens the CAD Context Menu cleanly
+  // on ALL OSes (Linux/macOS fire `contextmenu` on mousedown, so we trigger on `pointerup`!).
+  const rightBtnRef = useRef<{
+    down: boolean;
+    valid: boolean;
+    startX: number;
+    startY: number;
+    moved: boolean;
+  }>({
+    down: false,
+    valid: false,
+    startX: 0,
+    startY: 0,
+    moved: false,
+  });
+
+  const handleContainerPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button === 2) {
+      rightBtnRef.current = {
+        down: true,
+        valid: true,
+        startX: e.clientX,
+        startY: e.clientY,
+        moved: false,
+      };
+    }
+  }, []);
+
+  const handleContainerPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const r = rightBtnRef.current;
+    if (!r.down) return;
+    if (Math.hypot(e.clientX - r.startX, e.clientY - r.startY) >= 4) {
+      r.moved = true;
+    }
+  }, []);
+
+  const handleContainerPointerUpBubble = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button === 2) {
+      rightBtnRef.current.down = false;
+      rightBtnRef.current.valid = false;
+    }
+  }, []);
+
+  const handleMeshRightPointerUp = useCallback(
+    (e: ThreeEvent<PointerEvent>, target: NonNullable<SelectionTarget>) => {
+      if (e.nativeEvent.button !== 2) return;
+      const r = rightBtnRef.current;
+      const dist = Math.hypot(e.nativeEvent.clientX - r.startX, e.nativeEvent.clientY - r.startY);
+      if (!r.valid || r.moved || dist >= 4) {
+        return; // Right-drag Pan occurred — do NOT open context menu
+      }
+      e.stopPropagation();
+      r.valid = false;
+      onOpenContextMenu(e.nativeEvent.clientX, e.nativeEvent.clientY, target);
+    },
+    [onOpenContextMenu]
+  );
 
   return (
-    <div className="studio-viewport-bg relative h-full w-full select-none">
+    <div
+      id="viewport-3d-container"
+      className="studio-viewport-bg relative h-full w-full select-none"
+      onPointerDownCapture={handleContainerPointerDown}
+      onPointerMoveCapture={handleContainerPointerMove}
+      onPointerUp={handleContainerPointerUpBubble}
+      onContextMenu={(e) => e.preventDefault()}
+    >
       <Canvas
+        frameloop={active ? 'always' : 'never'}
         shadows
         dpr={[1, 2]}
         camera={{ fov: 36, near: 0.005, far: 80, position: [1.0, 0.65, 1.3] }}
-        onPointerMissed={() => onSelectPart(null)}
+        onPointerMissed={(e) => {
+          if (e.button === 0) onSelectTarget(null);
+        }}
         gl={{
           alpha: true,
           antialias: true,
@@ -291,8 +413,10 @@ export function DuctScene({
         {/* 3D Duct Parametric Model */}
         <DuctAssembly
           config={config}
-          selectedPartCode={selectedPartCode}
-          onSelectPart={onSelectPart}
+          ribPitchMm={ribPitchMm}
+          selection={selection}
+          onSelectTarget={onSelectTarget}
+          onContextMenuTarget={handleMeshRightPointerUp}
         />
 
         {/* Subtle Technical Floor Grid & Contact Shadows */}
