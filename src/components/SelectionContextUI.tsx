@@ -525,7 +525,9 @@ export function SelectionContextUI({
             const edge = foldGraph.edges[edgeId];
             if (!edge) return null;
             const isBend = edge.mode === 'bend';
-            const mergeCheck = isBend ? { allowed: true } : validateSetEdgeToBend(config, edgeId);
+            const mergeCheck = isBend
+              ? { allowed: true, wouldFormCycle: false, breakableCycleEdges: [] as FoldEdgeId[] }
+              : validateSetEdgeToBend(config, edgeId);
             const suggestedId = mergeCheck.suggestedSplitEdgeId;
             return (
               <div className="divide-y divide-[#1e2b3e]">
@@ -578,23 +580,35 @@ export function SelectionContextUI({
                     </button>
                   </div>
 
-                  {!isBend && !mergeCheck.allowed && suggestedId && (
-                    <div className="space-y-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-[10px] text-amber-200">
-                      <div className="flex items-start gap-1">
-                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-400" />
-                        <span>{mergeCheck.reason}</span>
+                  {!isBend && mergeCheck.wouldFormCycle && suggestedId && (
+                    <div className="space-y-1.5 rounded-lg border border-sky-500/35 bg-sky-500/10 p-2 text-[10px] text-sky-100">
+                      <div className="flex items-start gap-1 leading-snug text-sky-200">
+                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-sky-400" />
+                        <span>
+                          Gộp <strong>{edge.shortLabel}</strong> sẽ tự mở{' '}
+                          <strong>{FOLD_EDGE_DEFS[suggestedId].shortLabel}</strong> để trải phẳng (hoặc chọn cạnh mở):
+                        </span>
                       </div>
-                      <button
-                        id="ctx-edge-swap-merge"
-                        type="button"
-                        onClick={() => {
-                          onSwapEdgeMerge(edgeId, suggestedId);
-                          onCloseContextMenu();
-                        }}
-                        className="w-full rounded bg-amber-500/25 px-2 py-1 text-[10px] font-semibold text-amber-100 hover:bg-amber-500/35"
-                      >
-                        Tách {FOLD_EDGE_DEFS[suggestedId].shortLabel} &amp; gộp {edge.shortLabel}
-                      </button>
+                      <div className="flex flex-wrap gap-1">
+                        {mergeCheck.breakableCycleEdges.map((splitCandidate) => (
+                          <button
+                            key={splitCandidate}
+                            id={`ctx-edge-swap-merge-${splitCandidate}`}
+                            type="button"
+                            onClick={() => {
+                              onSwapEdgeMerge(edgeId, splitCandidate);
+                              onCloseContextMenu();
+                            }}
+                            className={`rounded px-2 py-1 text-[10px] font-semibold transition-colors ${
+                              splitCandidate === suggestedId
+                                ? 'bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400/45 hover:bg-emerald-500/35'
+                                : 'bg-[#172436] text-slate-200 hover:bg-sky-500/25 hover:text-white'
+                            }`}
+                          >
+                            Mở {FOLD_EDGE_DEFS[splitCandidate].shortLabel} &amp; gộp {edge.shortLabel}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -1599,7 +1613,9 @@ export function SelectionContextUI({
                 );
               }
               const isBend = edge.mode === 'bend';
-              const mergeCheck = isBend ? { allowed: true } : validateSetEdgeToBend(config, edgeId);
+              const mergeCheck = isBend
+                ? { allowed: true, wouldFormCycle: false, breakableCycleEdges: [] as FoldEdgeId[] }
+                : validateSetEdgeToBend(config, edgeId);
               const suggestedId = mergeCheck.suggestedSplitEdgeId;
 
               return (
@@ -1645,23 +1661,34 @@ export function SelectionContextUI({
                     </button>
                   </div>
 
-                  {/* Cycle-Guard Alert + 1-Click Auto-Swap */}
-                  {!isBend && !mergeCheck.allowed && (
-                    <div className="space-y-2 rounded-lg border border-amber-500/45 bg-amber-500/10 p-2.5 text-[10.5px] text-amber-200">
-                      <div className="flex items-start gap-1.5">
-                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-                        <span>{mergeCheck.reason}</span>
+                  {/* Smart Loop Resolution Preview + Multi-Choice Cut Switcher */}
+                  {!isBend && mergeCheck.wouldFormCycle && suggestedId && (
+                    <div className="space-y-2 rounded-lg border border-sky-500/40 bg-sky-500/10 p-2.5 text-[10.5px] text-sky-100">
+                      <div className="flex items-start gap-1.5 leading-snug text-sky-200">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-400" />
+                        <span>
+                          {mergeCheck.reason}. Bấm <strong>Liền mảnh</strong> sẽ tự mở{' '}
+                          <strong>{FOLD_EDGE_DEFS[suggestedId].shortLabel}</strong>, hoặc chọn cạnh mở
+                          bên dưới:
+                        </span>
                       </div>
-                      {suggestedId && (
-                        <button
-                          id="btn-inspector-edge-swap"
-                          type="button"
-                          onClick={() => onSwapEdgeMerge(edgeId, suggestedId)}
-                          className="w-full rounded-md bg-amber-500/25 px-2.5 py-1.5 font-semibold text-amber-100 ring-1 ring-amber-400/45 hover:bg-amber-500/35"
-                        >
-                          Tách {FOLD_EDGE_DEFS[suggestedId].shortLabel} &amp; gộp {edge.shortLabel}
-                        </button>
-                      )}
+                      <div className="flex flex-wrap gap-1">
+                        {mergeCheck.breakableCycleEdges.map((splitCandidate) => (
+                          <button
+                            key={splitCandidate}
+                            id={`btn-inspector-edge-swap-${splitCandidate}`}
+                            type="button"
+                            onClick={() => onSwapEdgeMerge(edgeId, splitCandidate)}
+                            className={`rounded-md px-2 py-1 text-[10px] font-semibold transition-colors ${
+                              splitCandidate === suggestedId
+                                ? 'bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400/45 hover:bg-emerald-500/35'
+                                : 'bg-[#172436] text-slate-200 hover:bg-sky-500/25 hover:text-white'
+                            }`}
+                          >
+                            Mở {FOLD_EDGE_DEFS[splitCandidate].shortLabel} &amp; gộp {edge.shortLabel}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
 

@@ -184,8 +184,10 @@ export interface ContextMenuState {
 export interface FreeMergeNotice {
   message: string;
   targetEdgeId: FoldEdgeId;
-  suggestedSplitEdgeId?: FoldEdgeId;
-  suggestedSplitLabel?: string;
+  appliedSplitEdgeId: FoldEdgeId;
+  alternativeSplitEdges: FoldEdgeId[];
+  baseEdgeStates: Partial<Record<FoldEdgeId, EdgeJoinMode>>;
+  prevFreeMergeMode: boolean;
 }
 
 export interface SplitRecommendation {

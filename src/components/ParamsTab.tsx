@@ -28,6 +28,7 @@ import {
   C2_CAP_EDGE_IDS,
   FACE_SHORT_LABELS,
   resolveFoldGraph,
+  type FreeMergePresetId,
 } from '../domain/foldGraph';
 import { getActiveSheetDimensions } from '../domain/workshopSettings';
 import type {
@@ -57,7 +58,7 @@ interface ParamsTabProps {
   onToggleAutoSplit: () => void;
   onToggleFreeMergeMode: () => void;
   onSetEdgeMode: (edgeId: FoldEdgeId, nextMode: EdgeJoinMode) => void;
-  onApplyFreeMergePreset: (preset: 'merge_c1_top' | 'cross_5_face' | 'reset_standard') => void;
+  onApplyFreeMergePreset: (preset: FreeMergePresetId) => void;
   onSwapSeams: () => void;
 }
 
@@ -691,15 +692,26 @@ export function ParamsTab({
               <span className="font-semibold text-emerald-200">
                 Ghép mảnh tự do ({foldGraph.components.length} mảnh)
               </span>
-              <button
-                id="btn-preset-reset-free-merge"
-                type="button"
-                onClick={() => onApplyFreeMergePreset('reset_standard')}
-                className="inline-flex items-center gap-1 rounded bg-[#182633] px-1.5 py-0.5 text-[9.5px] font-medium text-slate-300 hover:bg-[#233548] hover:text-white"
-              >
-                <RotateCcw className="h-2.5 w-2.5" />
-                <span>Đặt lại</span>
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  id="btn-preset-split-all"
+                  type="button"
+                  onClick={() => onApplyFreeMergePreset('split_all')}
+                  title="Tách rời toàn bộ các mặt để tự do ghép lại từ đầu"
+                  className="inline-flex items-center gap-1 rounded bg-[#182633] px-1.5 py-0.5 text-[9.5px] font-medium text-amber-200/90 hover:bg-[#233548] hover:text-amber-100"
+                >
+                  <span>Tách hết</span>
+                </button>
+                <button
+                  id="btn-preset-reset-free-merge"
+                  type="button"
+                  onClick={() => onApplyFreeMergePreset('reset_standard')}
+                  className="inline-flex items-center gap-1 rounded bg-[#182633] px-1.5 py-0.5 text-[9.5px] font-medium text-slate-300 hover:bg-[#233548] hover:text-white"
+                >
+                  <RotateCcw className="h-2.5 w-2.5" />
+                  <span>Đặt lại</span>
+                </button>
+              </div>
             </div>
 
             {/* Resolved connected components summary */}
@@ -725,7 +737,7 @@ export function ParamsTab({
               })}
             </div>
 
-            {/* Quick 5/6-face presets when C1 has End Cap */}
+            {/* Quick 5/6-face training & creative presets when C1 has End Cap */}
             {config.c1.type === 'end_cap' && (
               <div className="grid grid-cols-2 gap-1">
                 <button
@@ -737,6 +749,14 @@ export function ParamsTab({
                   Gộp Bịt C1 + Trên
                 </button>
                 <button
+                  id="btn-preset-merge-c1-top-bottom"
+                  type="button"
+                  onClick={() => onApplyFreeMergePreset('merge_c1_top_bottom')}
+                  className="rounded border border-emerald-500/40 bg-emerald-500/12 px-1.5 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/22"
+                >
+                  Bịt C1 nối Trên+Dưới
+                </button>
+                <button
                   id="btn-preset-cross-5-face"
                   type="button"
                   onClick={() => onApplyFreeMergePreset('cross_5_face')}
@@ -744,6 +764,16 @@ export function ParamsTab({
                 >
                   Chữ thập 5 mặt
                 </button>
+                {config.c2.type === 'end_cap' && (
+                  <button
+                    id="btn-preset-box-6-face"
+                    type="button"
+                    onClick={() => onApplyFreeMergePreset('box_6_face')}
+                    className="rounded border border-sky-500/40 bg-sky-500/12 px-1.5 py-1 text-[10px] font-semibold text-sky-200 hover:bg-sky-500/22"
+                  >
+                    Hộp kín 6 mặt
+                  </button>
+                )}
               </div>
             )}
 
@@ -782,9 +812,10 @@ export function ParamsTab({
             )}
 
             <p className="text-[9.5px] leading-snug text-slate-400">
-              Cạnh màu <span className="font-semibold text-emerald-300">xanh lá</span> = Chấn 90° liền
-              mảnh; <span className="font-semibold text-amber-300">vàng cam</span> = Mí ghép rời. Có thể
-              click/chuột phải trực tiếp lên các cạnh ngay trên 3D &amp; 2D.
+              Cạnh <span className="font-semibold text-emerald-300">xanh lá</span> = Chấn 90° liền
+              mảnh; <span className="font-semibold text-amber-300">vàng cam</span> = Mí ghép rời. Khi
+              ghép cạnh mới tạo vòng khép kín, hệ thống tự mở 1 cạnh mí phù hợp để tấm luôn trải phẳng
+              và cho phép đổi cạnh mở chỉ với 1 click.
             </p>
           </div>
         )}

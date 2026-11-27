@@ -290,16 +290,31 @@ export function getEffectiveEdgeStates(config: DuctConfig): Record<FoldEdgeId, E
 }
 
 export interface EdgeMergeValidation {
+  /** True when `edgeId` can be merged immediately without opening any other edge */
   allowed: boolean;
+  /** True when merging `edgeId` closes a face-loop and requires opening 1 existing bend edge on that loop */
+  wouldFormCycle: boolean;
   reason?: string;
+  /** All edges forming the closed face-loop (including `edgeId`) */
   cycleEdges?: FoldEdgeId[];
+  /** Human-readable short names of the faces forming the closed loop */
+  cycleFaceLabels?: string[];
+  /** Ranked list of existing 'bend' edges on the loop that can be opened so `edgeId` merges cleanly */
+  breakableCycleEdges: FoldEdgeId[];
+  /** Smartest default edge to auto-open (preserves cap-to-body intent by opening conflicting body seams first) */
   suggestedSplitEdgeId?: FoldEdgeId;
 }
 
 /**
- * Checks whether setting `edgeId` to `'bend'` (Liền mảnh — Chấn 90°) preserves a valid
- * acyclic spanning forest. If merging creates a closed cycle, returns the exact cycle
- * and suggests the most intuitive edge to split so the user can swap hinges in 1 click.
+ * Evaluates setting `edgeId` to `'bend'` (Liền mảnh — Chấn 90°) on the Face–Edge Graph.
+ *
+ * Real sheet-metal unfolding rule:
+ * Any set of faces on a rectangular duct (4, 5, or 6 faces) can be merged into a single
+ * flat-unfoldable sheet iff the bend edges form an acyclic spanning tree (every closed loop
+ * of faces has at least 1 seam cut). When merging `edgeId` closes an indirect loop (for example,
+ * attaching `C1-Dưới` while `C1-Trên` is already merged on a `1 mảnh (O)` duct whose body corners
+ * `TL`/`BL` are still bent), this ranks ALL breakable edges on the loop — prioritizing conflicting
+ * body seams (e.g. `BL` or `TL`) so BOTH opposite cap connections stay merged cleanly!
  */
 export function validateSetEdgeToBend(
   config: DuctConfig,
@@ -307,16 +322,21 @@ export function validateSetEdgeToBend(
 ): EdgeMergeValidation {
   const activeEdges = getActiveEdgeIds(config);
   if (!activeEdges.includes(edgeId)) {
-    return { allowed: false, reason: 'Cạnh này không tồn tại trong cấu hình hiện tại.' };
+    return {
+      allowed: false,
+      wouldFormCycle: false,
+      breakableCycleEdges: [],
+      reason: 'Cạnh này không tồn tại trong cấu hình hiện tại.',
+    };
   }
 
   const states = getEffectiveEdgeStates(config);
   if (states[edgeId] === 'bend') {
-    return { allowed: true };
+    return { allowed: true, wouldFormCycle: false, breakableCycleEdges: [] };
   }
 
   const [startFace, targetFace] = FOLD_EDGE_DEFS[edgeId].faces;
-  // BFS over existing 'bend' edges to detect path between startFace and targetFace
+  // BFS over existing 'bend' edges to detect the unique simple path between startFace and targetFace
   const adj = new Map<FaceId, { next: FaceId; via: FoldEdgeId }[]>();
   for (const eid of activeEdges) {
     if (states[eid] !== 'bend') continue;
@@ -343,35 +363,78 @@ export function validateSetEdgeToBend(
   }
 
   if (!visited.has(targetFace)) {
-    return { allowed: true };
+    return { allowed: true, wouldFormCycle: false, breakableCycleEdges: [] };
   }
 
-  // Reconstruct simple path forming the cycle
+  // Reconstruct the simple path of faces & existing 'bend' edges closing the loop
   const pathEdges: FoldEdgeId[] = [];
+  const pathFaces: FaceId[] = [targetFace];
   let walk: FaceId = targetFace;
   while (walk !== startFace) {
     const info = prev.get(walk)!;
     pathEdges.push(info.via);
     walk = info.from;
+    pathFaces.push(walk);
   }
 
   const def = FOLD_EDGE_DEFS[edgeId];
-  // Choose best suggested edge to split:
-  // 1) Opposite edge if it lies on the cycle
-  // 2) Same-kind edge (e.g. another cap_c1 edge if merging a cap_c1 edge)
-  // 3) First edge along the cycle path
-  let suggestedSplitEdgeId: FoldEdgeId | undefined;
-  if (def.oppositeEdgeId && pathEdges.includes(def.oppositeEdgeId)) {
-    suggestedSplitEdgeId = def.oppositeEdgeId;
-  } else {
-    suggestedSplitEdgeId =
-      pathEdges.find((e) => FOLD_EDGE_DEFS[e].kind === def.kind) ?? pathEdges[0];
-  }
+  const hasBodyInPath = pathEdges.some((e) => FOLD_EDGE_DEFS[e].kind === 'body');
+  const hasCapInPath = pathEdges.some((e) => FOLD_EDGE_DEFS[e].kind !== 'body');
+
+  // Rank breakable edges so auto-resolve ALWAYS respects real fabrication intent:
+  // - Merging a CAP edge (e.g. C1-Dưới when C1-Trên is already merged):
+  //   Prefer breaking a BODY corner edge on the loop (starting with one incident to def.wall, e.g. BL)
+  //   so BOTH opposite/adjacent cap bends stay merged into one flat sheet!
+  // - Merging a BODY edge when caps are in the loop (e.g. from 5-face cross):
+  //   Prefer breaking a cap edge incident to the second wall of the body edge.
+  // - Pure 4-wall body loop (TL+TR+BR+BL) or pure C1–C2 ring:
+  //   Prefer opening the opposite edge symmetrically.
+  const scoreEdge = (eid: FoldEdgeId, idx: number): number => {
+    const ed = FOLD_EDGE_DEFS[eid];
+    if (def.kind !== 'body') {
+      if (hasBodyInPath) {
+        if (ed.kind === 'body') {
+          const touchesWall = def.wall !== undefined && ed.faces.includes(def.wall);
+          return touchesWall ? idx * 0.01 : 10 + idx * 0.01;
+        }
+        return 30 + idx * 0.01;
+      }
+      // Pure cap-to-cap loop (no body edges): prefer opposite edge on same cap
+      if (def.oppositeEdgeId && eid === def.oppositeEdgeId) return idx * 0.01;
+      if (ed.kind === def.kind) return 10 + idx * 0.01;
+      return 20 + idx * 0.01;
+    }
+
+    // Merging a body edge (TL / TR / BR / BL)
+    if (hasCapInPath) {
+      if (ed.kind !== 'body') {
+        const touchesSecond = ed.faces.includes(def.faces[1]);
+        const touchesFirst = ed.faces.includes(def.faces[0]);
+        if (touchesSecond) return idx * 0.01;
+        if (touchesFirst) return 5 + idx * 0.01;
+        return 10 + idx * 0.01;
+      }
+      return 20 + idx * 0.01;
+    }
+
+    // Pure 4-wall body loop: open opposite corner symmetrically first
+    if (def.oppositeEdgeId && eid === def.oppositeEdgeId) return idx * 0.01;
+    return 10 + idx * 0.01;
+  };
+
+  const breakableCycleEdges = [...pathEdges].sort(
+    (a, b) => scoreEdge(a, pathEdges.indexOf(a)) - scoreEdge(b, pathEdges.indexOf(b))
+  );
+  const suggestedSplitEdgeId = breakableCycleEdges[0];
+  const cycleFaceLabels = pathFaces.map((f) => FACE_SHORT_LABELS[f]);
 
   return {
     allowed: false,
-    reason: 'Không thể nối kín vòng — cần tách ít nhất 1 cạnh để trải phẳng',
+    wouldFormCycle: true,
+    reason: `Vòng khép kín (${cycleFaceLabels.join(' – ')}) cần mở 1 cạnh làm mí ghép để trải phẳng`,
     cycleEdges: [...pathEdges, edgeId],
+    cycleFaceLabels,
+    breakableCycleEdges,
     suggestedSplitEdgeId,
   };
 }
@@ -795,25 +858,83 @@ export function resolveFoldGraph(config: DuctConfig): ResolvedFoldGraph {
   };
 }
 
+export type FreeMergePresetId =
+  | 'merge_c1_top'
+  | 'merge_c1_top_bottom'
+  | 'cross_5_face'
+  | 'box_6_face'
+  | 'split_all'
+  | 'reset_standard';
+
 /**
- * Convenience preset builders for 5-face / 6-face free-merge training demos.
+ * Convenience preset builders for 4-, 5-, and 6-face free-merge training & creative demos.
  */
 export function buildFreeMergePresetEdges(
   config: DuctConfig,
-  preset: 'merge_c1_top' | 'cross_5_face' | 'reset_standard'
+  preset: FreeMergePresetId
 ): Partial<Record<FoldEdgeId, EdgeJoinMode>> {
   const base = getDefaultEdgeStatesForSplitMode(config.splitMode);
   if (preset === 'reset_standard') {
     return base;
   }
+  if (preset === 'split_all') {
+    return {
+      TL: 'seam',
+      TR: 'seam',
+      BR: 'seam',
+      BL: 'seam',
+      C1_top: 'seam',
+      C1_bottom: 'seam',
+      C1_left: 'seam',
+      C1_right: 'seam',
+      C2_top: 'seam',
+      C2_bottom: 'seam',
+      C2_left: 'seam',
+      C2_right: 'seam',
+    };
+  }
   if (preset === 'merge_c1_top') {
-    // Keep body split as-is (valid tree) and merge cap_c1 onto top!
+    // Keep body split as-is (valid tree) and merge cap_c1 onto top
     return {
       ...base,
       C1_top: 'bend',
       C1_bottom: 'seam',
       C1_left: 'seam',
       C1_right: 'seam',
+    };
+  }
+  if (preset === 'merge_c1_top_bottom') {
+    // Classic opposite-wall net through Bịt C1: [Trái + Trên] — Bịt C1 — [Dưới + Phải] (100% flat!)
+    return {
+      TL: 'bend',
+      TR: 'seam',
+      BR: 'bend',
+      BL: 'seam',
+      C1_top: 'bend',
+      C1_bottom: 'bend',
+      C1_left: 'seam',
+      C1_right: 'seam',
+      C2_top: 'seam',
+      C2_bottom: 'seam',
+      C2_left: 'seam',
+      C2_right: 'seam',
+    };
+  }
+  if (preset === 'box_6_face') {
+    // Full 6-face single-piece box net: 4 body walls + C1 on Top + C2 on Bottom
+    return {
+      TL: 'bend',
+      TR: 'seam',
+      BR: 'bend',
+      BL: 'bend',
+      C1_top: 'bend',
+      C1_bottom: 'seam',
+      C1_left: 'seam',
+      C1_right: 'seam',
+      C2_top: 'seam',
+      C2_bottom: 'bend',
+      C2_left: 'seam',
+      C2_right: 'seam',
     };
   }
   // 'cross_5_face': 5-face cross with cap_c1 in center + all 4 body walls hinged to cap_c1

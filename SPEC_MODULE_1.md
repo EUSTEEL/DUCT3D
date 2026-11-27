@@ -90,15 +90,18 @@
   - `2 mảnh chữ L` (`1-A`, `1-B`): `2*(W+H) > 2400 mm`, `(W+H) ≤ 3000 mm`, và `L_phôi ≤ W_tấm`. Mặc định cạnh lớn hơn mang **Mí kép**, cạnh nhỏ hơn mang **Mí đơn**.
   - `2 mảnh chữ U+I` (`1-A`, `1-B`): Cho phép chọn thủ công để so sánh.
   - `4 mảnh` (`1-A`, `1-B`, `1-C`, `1-D`): `(W+H) > 3000 mm`, HOẶC khi `L_phôi > W_tấm` mà các mảnh đơn `W + mí ≤ W_tấm` và `H + mí ≤ W_tấm` (xoay dọc tấm `W_tấm × L_tấm`).
-- **Chế độ `Ghép mảnh tự do` (Face–Edge Graph cho chi tiết 4–5–6 mặt kín & đào tạo triển khai):**
+- **Chế độ `Ghép mảnh tự do` (Face–Edge Graph cho chi tiết 4–5–6 mặt kín, đào tạo & sáng tạo phương án sản xuất):**
   - Bật/tắt qua nút **`Ghép tự do`** ngay cạnh mục `Chia mảnh` (hoặc chuột phải / click đúp trực tiếp lên bất kỳ cạnh tiếp giáp nào trên 3D & 2D).
   - Mỗi cạnh tiếp giáp giữa 2 mặt kề nhau (`TL`, `TR`, `BR`, `BL` của thân ống; `C1_top..C1_right` của đầu bịt C1; `C2_top..C2_right` của đầu bịt C2) đều có 2 trạng thái độc lập:
     - **`Liền mảnh (Chấn 90°)`** *(màu xanh lá)*: Gộp 2 mặt thành một tấm tôn liền, có đường chấn 90° tại cạnh chung.
     - **`Tách mảnh (Mí ghép / Hàn)`** *(màu vàng cam)*: Tách rời bằng mí gò Pittsburgh hoặc mí hàn tùy chọn.
-  - **Bảo vệ vòng kín tự động (`Cycle Guard` / `Spanning Tree`):** Kiểm tra đồ thị bằng thuật toán BFS/Union-Find trước khi gộp cạnh; nếu nối cạnh mới sẽ tạo thành vòng kín không thể trải phẳng, hệ thống chặn lại và hiển thị thông báo rõ ràng *"Không thể nối kín vòng — cần tách ít nhất 1 cạnh để trải phẳng"* kèm nút **1 click tự tách cạnh đối diện/gợi ý & gộp cạnh đang chọn**.
-  - **Tự kiểm tra chồng lấn phôi 2D (`hasOverlap2D`):** Khi trải phẳng một cây mảnh tự do có các mặt bị đè nhau trên mặt phẳng 2D, hệ thống tự động phát hiện, tô khung viền cam + vùng gạch chéo cam ngay trên bản vẽ 2D (và bản in PDF) đồng thời hiện cảnh báo trong tab `S Phôi`.
-  - **Preset đào tạo 5 mặt nhanh:** `Gộp Bịt C1 + Trên` (gộp đầu bịt kín C1 liền với mặt Trên qua 1 đường chấn), `Chữ thập 5 mặt` (mặt Bịt C1 ở giữa mở liền cả 4 vách thân xung quanh), `Đặt lại`.
-  - **Đồng bộ 100% toàn hệ thống:** Mọi thay đổi ghép/tách mảnh cập nhật tức thì trên 3D, hoạt ảnh **`Mở phôi 3D`** (đầu bịt mở liền theo đúng mặt gắn), bản vẽ **2D** (gộp thành 1 đường cắt `CUT` khép kín duy nhất kèm đường chấn ngang/dọc), xuất **DXF**, diện tích **`S Phôi`** và kiểm tra khổ **`1200×6000` / `1250×6000`**.
+  - **Quy tắc trải phẳng thực tế & Tự động mở mí vòng kín thông minh (KHÔNG chặn cứng thao tác ghép):**
+    - Mọi tổ hợp mặt tạo thành cây liên thông không vòng kín (cả **45** kiểu trải 5 mặt và **384** kiểu trải 6 mặt của khối hộp chữ nhật, kể cả ghép mặt bịt đầu vào **2 mặt thân đối diện** không chung cạnh như `Trên — Bịt C1 — Dưới`) đều trải phẳng 2D thành 1 tấm liền hoàn toàn không chồng đè.
+    - Khi người dùng bấm ghép một cạnh mới mà cạnh này vô tình khép thành vòng kín qua các nếp chấn đang có (ví dụ: đang có `1 mảnh (O)` với `TL/BL/BR` chấn sẵn + `C1-Trên`, bấm ghép thêm `C1-Dưới` hoặc `C1-Phải`), hệ thống **tự động thực hiện ghép ngay** đồng thời **ưu tiên mở 1 cạnh mí dọc thân ống xung đột trên vòng** (ví dụ tự mở `BL` để giữ liền cả `C1-Trên` lẫn `C1-Dưới`, thay vì chặn thao tác hoặc bắt hủy `C1-Trên`).
+    - Thanh thông báo không chặn hiển thị rõ vòng mặt vừa mở mí kèm **nút 1 click đổi sang mở bất kỳ cạnh nào khác trên vòng** (`Đổi mở TL`, `Đổi mở C1-Trên`...) và nút **`Hoàn tác`**.
+  - **Tự kiểm tra chồng lấn phôi 2D (`hasOverlap2D`):** Tự động kiểm tra toàn bộ các cặp mặt khi trải phẳng 2D (nếu có đè nhau sẽ tô khung viền cam + gạch chéo cam và cảnh báo trong tab `S Phôi`).
+  - **Preset đào tạo & sáng tạo nhanh:** `Gộp Bịt C1 + Trên`, `Bịt C1 nối Trên+Dưới` (`[Trái+Trên] — Bịt C1 — [Dưới+Phải]`), `Chữ thập 5 mặt`, `Hộp kín 6 mặt` (khi cả C1 & C2 là đầu bịt), `Tách hết` (tách rời tất cả 4–6 mặt để tự do ghép từ đầu), `Đặt lại`.
+  - **Đồng bộ 100% toàn hệ thống:** Mọi thay đổi ghép/tách mảnh cập nhật tức thì trên 3D, hoạt ảnh **`Tách mảnh`** & **`Mở phôi 3D`** (đầu bịt mở liền theo đúng mặt gắn), bản vẽ **2D** (gộp thành 1 đường cắt `CUT` khép kín duy nhất kèm đường chấn ngang/dọc), xuất **DXF**, diện tích **`S Phôi`** và kiểm tra khổ **`1200×6000` / `1250×6000`**.
 
 ### 3.4. Thư viện Đầu kết nối (Chọn độc lập cho Đầu C1 và Đầu C2 — qua thẻ C1/C2 hoặc click đúp/chuột phải trực tiếp trên 3D/2D)
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, PanelLeftOpen, Sliders, X } from 'lucide-react';
+import { CheckCircle2, PanelLeftOpen, Sliders, Undo2, X } from 'lucide-react';
 import { FlatPattern2DViewer } from './components/FlatPattern2DViewer';
 import { LeftSidebar } from './components/LeftSidebar';
 import { SelectionContextUI } from './components/SelectionContextUI';
@@ -18,6 +18,7 @@ import {
   FOLD_EDGE_DEFS,
   getDefaultEdgeStatesForSplitMode,
   validateSetEdgeToBend,
+  type FreeMergePresetId,
 } from './domain/foldGraph';
 import {
   DEFAULT_WORKSHOP_SETTINGS,
@@ -306,7 +307,7 @@ export function App() {
   const handleSetEdgeMode = useCallback(
     (edgeId: FoldEdgeId, nextMode: EdgeJoinMode) => {
       const baseStates = config.freeMergeMode
-        ? config.customEdgeStates
+        ? { ...config.customEdgeStates }
         : getDefaultEdgeStatesForSplitMode(config.splitMode);
       const testCfg: DuctConfig = {
         ...config,
@@ -316,17 +317,32 @@ export function App() {
       };
       if (nextMode === 'bend') {
         const check = validateSetEdgeToBend(testCfg, edgeId);
-        if (!check.allowed) {
-          setFreeMergeNotice({
-            message:
-              check.reason ??
-              'Không thể nối kín vòng — cần tách ít nhất 1 cạnh để trải phẳng',
-            targetEdgeId: edgeId,
-            suggestedSplitEdgeId: check.suggestedSplitEdgeId,
-            suggestedSplitLabel: check.suggestedSplitEdgeId
-              ? FOLD_EDGE_DEFS[check.suggestedSplitEdgeId].shortLabel
-              : undefined,
+        if (!check.allowed && check.wouldFormCycle && check.suggestedSplitEdgeId) {
+          const splitId = check.suggestedSplitEdgeId;
+          const edgeShort = FOLD_EDGE_DEFS[edgeId].shortLabel;
+          const splitShort = FOLD_EDGE_DEFS[splitId].shortLabel;
+          const loopTxt = check.cycleFaceLabels?.length
+            ? ` (vòng ${check.cycleFaceLabels.join(' – ')})`
+            : '';
+          setConfig({
+            ...testCfg,
+            customEdgeStates: {
+              ...baseStates,
+              [splitId]: 'seam',
+              [edgeId]: 'bend',
+            },
           });
+          setFreeMergeNotice({
+            message: `Đã gộp ${edgeShort} — tự mở mí ${splitShort} để giữ tấm trải phẳng${loopTxt}`,
+            targetEdgeId: edgeId,
+            appliedSplitEdgeId: splitId,
+            alternativeSplitEdges: check.breakableCycleEdges,
+            baseEdgeStates: baseStates,
+            prevFreeMergeMode: config.freeMergeMode,
+          });
+          return;
+        }
+        if (!check.allowed) {
           return;
         }
       }
@@ -345,7 +361,7 @@ export function App() {
   const handleSwapEdgeMerge = useCallback(
     (mergeEdgeId: FoldEdgeId, splitEdgeId: FoldEdgeId) => {
       const baseStates = config.freeMergeMode
-        ? config.customEdgeStates
+        ? { ...config.customEdgeStates }
         : getDefaultEdgeStatesForSplitMode(config.splitMode);
       setFreeMergeNotice(null);
       setConfig({
@@ -362,18 +378,55 @@ export function App() {
     [config]
   );
 
-  const handleApplyFreeMergePreset = useCallback(
-    (preset: 'merge_c1_top' | 'cross_5_face' | 'reset_standard') => {
-      setFreeMergeNotice(null);
+  const handleSwitchAutoSplitEdge = useCallback(
+    (altSplitEdgeId: FoldEdgeId) => {
+      if (!freeMergeNotice) return;
+      const { targetEdgeId, baseEdgeStates, alternativeSplitEdges, prevFreeMergeMode } =
+        freeMergeNotice;
+      const edgeShort = FOLD_EDGE_DEFS[targetEdgeId].shortLabel;
+      const splitShort = FOLD_EDGE_DEFS[altSplitEdgeId].shortLabel;
       setConfig((prev) => ({
         ...prev,
         freeMergeMode: true,
         autoSplit: false,
-        customEdgeStates: buildFreeMergePresetEdges(prev, preset),
+        customEdgeStates: {
+          ...baseEdgeStates,
+          [altSplitEdgeId]: 'seam',
+          [targetEdgeId]: 'bend',
+        },
       }));
+      setFreeMergeNotice({
+        message: `Đã gộp ${edgeShort} — đang mở mí ${splitShort} để trải phẳng`,
+        targetEdgeId,
+        appliedSplitEdgeId: altSplitEdgeId,
+        alternativeSplitEdges,
+        baseEdgeStates,
+        prevFreeMergeMode,
+      });
     },
-    []
+    [freeMergeNotice]
   );
+
+  const handleUndoAutoSplit = useCallback(() => {
+    if (!freeMergeNotice) return;
+    const { baseEdgeStates, prevFreeMergeMode } = freeMergeNotice;
+    setConfig((prev) => ({
+      ...prev,
+      freeMergeMode: prevFreeMergeMode,
+      customEdgeStates: { ...baseEdgeStates },
+    }));
+    setFreeMergeNotice(null);
+  }, [freeMergeNotice]);
+
+  const handleApplyFreeMergePreset = useCallback((preset: FreeMergePresetId) => {
+    setFreeMergeNotice(null);
+    setConfig((prev) => ({
+      ...prev,
+      freeMergeMode: true,
+      autoSplit: false,
+      customEdgeStates: buildFreeMergePresetEdges(prev, preset),
+    }));
+  }, []);
 
   const handleSwapSeams = useCallback(() => {
     setConfig((prev) => ({
@@ -498,47 +551,52 @@ export function App() {
           onOpenWorkshopSettings={() => setSettingsModalOpen(true)}
         />
 
-        {/* Cycle-Guard Alert Toast for Face–Edge Free-Merge Mode */}
-        {freeMergeNotice && (
-          <div
-            id="free-merge-cycle-toast"
-            role="alert"
-            className="absolute top-13 left-1/2 z-50 flex max-w-[92%] -translate-x-1/2 flex-wrap items-center gap-2 rounded-xl border border-amber-500/55 bg-[#1a1610]/96 px-3.5 py-2 text-xs text-amber-100 shadow-2xl backdrop-blur-md"
-          >
-            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
-            <span className="font-medium">{freeMergeNotice.message}</span>
-            {freeMergeNotice.suggestedSplitEdgeId && (
-              <button
-                id="btn-toast-swap-merge"
-                type="button"
-                onClick={() =>
-                  handleSwapEdgeMerge(
-                    freeMergeNotice.targetEdgeId,
-                    freeMergeNotice.suggestedSplitEdgeId!
-                  )
-                }
-                className="rounded-md bg-amber-500/25 px-2.5 py-1 text-[11px] font-semibold text-amber-100 ring-1 ring-amber-400/50 transition-colors hover:bg-amber-500/35"
-              >
-                Tách {freeMergeNotice.suggestedSplitLabel} &amp; gộp{' '}
-                {FOLD_EDGE_DEFS[freeMergeNotice.targetEdgeId].shortLabel}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setFreeMergeNotice(null)}
-              aria-label="Đóng cảnh báo"
-              className="rounded p-0.5 text-amber-300 hover:bg-amber-500/20 hover:text-white"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        )}
-
         <div
           className={`relative min-h-0 flex-1 overflow-hidden ${
             isSplit ? 'grid grid-cols-1 lg:grid-cols-2' : 'flex'
           }`}
         >
+          {/* Smart Auto-Resolve Info Toast for Face–Edge Free-Merge Mode */}
+          {freeMergeNotice && (
+            <div
+              id="free-merge-cycle-toast"
+              role="status"
+              className="absolute top-2.5 left-1/2 z-50 flex max-w-[94%] -translate-x-1/2 flex-wrap items-center gap-1.5 rounded-xl border border-emerald-500/45 bg-[#0e1a1c]/96 px-3.5 py-2 text-xs text-emerald-100 shadow-2xl backdrop-blur-md"
+            >
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+              <span className="font-medium">{freeMergeNotice.message}</span>
+              {freeMergeNotice.alternativeSplitEdges
+                .filter((eid) => eid !== freeMergeNotice.appliedSplitEdgeId)
+                .map((altId) => (
+                  <button
+                    key={altId}
+                    id={`btn-toast-alt-split-${altId}`}
+                    type="button"
+                    onClick={() => handleSwitchAutoSplitEdge(altId)}
+                    className="rounded-md bg-sky-500/20 px-2 py-0.5 text-[11px] font-semibold text-sky-100 ring-1 ring-sky-400/45 transition-colors hover:bg-sky-500/32"
+                  >
+                    Đổi mở {FOLD_EDGE_DEFS[altId].shortLabel}
+                  </button>
+                ))}
+              <button
+                id="btn-toast-undo-merge"
+                type="button"
+                onClick={handleUndoAutoSplit}
+                className="inline-flex items-center gap-1 rounded-md bg-slate-700/55 px-2 py-0.5 text-[11px] font-medium text-slate-200 ring-1 ring-slate-500/40 transition-colors hover:bg-slate-600/70 hover:text-white"
+              >
+                <Undo2 className="h-3 w-3" />
+                <span>Hoàn tác</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFreeMergeNotice(null)}
+                aria-label="Đóng thông báo"
+                className="rounded p-0.5 text-emerald-300 hover:bg-emerald-500/20 hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
           {/* 3D Studio Viewport Pane (kept mounted & paused in 2D-only mode to preserve camera/textures with zero WebGL context churn) */}
           <div
             className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${

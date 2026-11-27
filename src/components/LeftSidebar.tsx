@@ -9,6 +9,7 @@ import type {
   SplitMode,
   WorkshopSettings,
 } from '../types/duct';
+import type { FreeMergePresetId } from '../domain/foldGraph';
 import type { FlatPatternDocument } from '../types/flatPattern2d';
 import { BlankAnalysisTab } from './BlankAnalysisTab';
 import { LsxTab } from './LsxTab';
@@ -32,7 +33,7 @@ interface LeftSidebarProps {
   onToggleAutoSplit: () => void;
   onToggleFreeMergeMode: () => void;
   onSetEdgeMode: (edgeId: FoldEdgeId, nextMode: EdgeJoinMode) => void;
-  onApplyFreeMergePreset: (preset: 'merge_c1_top' | 'cross_5_face' | 'reset_standard') => void;
+  onApplyFreeMergePreset: (preset: FreeMergePresetId) => void;
   onSwapSeams: () => void;
 }
 
