@@ -11,6 +11,7 @@ import {
   getEndCapEdgeSeam,
 } from './endConnectionRules';
 import { computeRibLayout, getEndCapPartCode, getWallLength } from './ductRules';
+import { resolveFoldGraph, type ResolvedFoldGraph } from './foldGraph';
 
 export const MM_TO_M = 0.001;
 
@@ -653,9 +654,82 @@ export function appendPieceIntegralEndFlanges(
 // ---------------------------------------------------------------------------
 
 /**
- * Builds 4 stamped 3D TDC/TDF corner brackets with real 3D teardrop bolt holes
- * (pointed tip facing INWARD toward duct corner, round arc facing OUTWARD per ke_góc_đã_đóng_nhìn_mặt_trước.jpg)
- * and chamfered insertion leg tips (per ke_góc_1.jpg) sliding cleanly inside the hollow C-box channels.
+ * Merges an array of non-indexed or indexed BufferGeometries (all in mm or m) into a single
+ * non-indexed BufferGeometry with clean normals and UVs.
+ */
+function mergeSimpleGeometries(geoms: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  for (const raw of geoms) {
+    const g = raw.index ? raw.toNonIndexed() : raw;
+    const pos = g.getAttribute('position');
+    const uv = g.getAttribute('uv');
+    for (let i = 0; i < pos.count; i++) {
+      positions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+      if (uv) uvs.push(uv.getX(i), uv.getY(i));
+      else uvs.push(0, 0);
+    }
+    if (g !== raw) g.dispose();
+    raw.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  out.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  out.computeVertexNormals();
+  out.computeBoundingBox();
+  out.computeBoundingSphere();
+  return out;
+}
+
+/**
+ * Transforms an ExtrudeGeometry (in mm local bracket coordinates) to world corner coordinates (in meters)
+ * while preserving outward right-handed triangle winding for mirrored corners (sx * sy < 0).
+ */
+function transformCornerExtrudeMmToWorldM(
+  geom: THREE.BufferGeometry,
+  sx: 1 | -1,
+  sy: 1 | -1,
+  hw: number,
+  hh: number,
+  zOriginMm: number,
+  zScale: 1 | -1
+): THREE.BufferGeometry {
+  const g = geom.index ? geom.toNonIndexed() : geom;
+  if (g !== geom) geom.dispose();
+  const posAttr = g.getAttribute('position');
+  const flipWinding = sx * sy * zScale < 0;
+  for (let i = 0; i < posAttr.count; i++) {
+    const lx = posAttr.getX(i);
+    const ly = posAttr.getY(i);
+    const lz = posAttr.getZ(i);
+    posAttr.setXYZ(
+      i,
+      (sx * hw + sx * lx) * MM_TO_M,
+      (sy * hh + sy * ly) * MM_TO_M,
+      (zOriginMm + zScale * lz) * MM_TO_M
+    );
+  }
+  if (flipWinding) {
+    for (let i = 0; i < posAttr.count; i += 3) {
+      const x1 = posAttr.getX(i + 1), y1 = posAttr.getY(i + 1), z1 = posAttr.getZ(i + 1);
+      const x2 = posAttr.getX(i + 2), y2 = posAttr.getY(i + 2), z2 = posAttr.getZ(i + 2);
+      posAttr.setXYZ(i + 1, x2, y2, z2);
+      posAttr.setXYZ(i + 2, x1, y1, z1);
+    }
+  }
+  posAttr.needsUpdate = true;
+  return g;
+}
+
+/**
+ * Builds 4 realistic stamped 3D TDC/TDF corner brackets matching workshop photos
+ * (`ke_góc_1.jpg`, `ke_góc_cận_cảnh.jpg`, `ke_góc_đã_đóng.jpg`, `ke_góc_đã_đóng_nhìn_mặt_trước.jpg`):
+ * - Recessed L-shaped insertion legs sliding snugly inside the hollow TDC C-channel behind the flange face
+ * - Long diagonal lead-in tip chamfers + outer channel retention steps (`tai gài rãnh bích`)
+ * - Stamped 3D longitudinal stiffening ribs embossed down the center of both legs (`gân dập định hình`)
+ * - Raised stepped front corner pad sitting FLUSH (`đồng mặt phẳng`) with the TDC flange face,
+ *   with rounded outer corner, 45° chamfered inner step shoulder, and authentic teardrop bolt hole
+ *   (pointed V-tip facing INWARD toward duct corner, round lobe facing OUTWARD).
  */
 function buildTdcCornerBrackets(
   endKey: 'c1' | 'c2',
@@ -670,61 +744,123 @@ function buildTdcCornerBrackets(
   const hw = W / 2;
   const hh = H / 2;
   const z0 = endSign * (L / 2);
-  const bracketThick = 1.6;
+  const legThick = 1.45;
+  const padForwardStep = t + gap + 0.15; // brings front of corner pad 100% flush with flange front face!
+  const padThick = legThick + padForwardStep;
   const hFlange = 32.0;
-  const sqSize = hFlange - (t + gap) - 0.6;
+  const sqSize = hFlange - (t + gap) - 0.5;
   if (sqSize < 12) return [];
 
-  const legLen = Math.min(44, Math.min(W, H) * 0.32);
-  const legInner = Math.max(3.5, t + gap + 2.5);
-  const legOuter = Math.min(sqSize - 3.5, 21.5);
-  const startOff = t + gap + 0.3;
-  const legChamfer = Math.min(5.5, (legOuter - legInner) * 0.42, legLen * 0.25);
+  const startOff = t + gap + 0.25;
+  const legLen = Math.min(46, Math.min(W, H) * 0.34);
+  const legInner = Math.max(3.2, t + gap + 2.0);
+  const legOuter = Math.min(sqSize - 2.6, 23.0);
+  const legOuterChamfer = Math.min(9.5, (legOuter - legInner) * 0.52, legLen * 0.34);
+  const legInnerChamfer = Math.min(2.4, (legOuter - legInner) * 0.18);
+  const catchNotch = 2.0; // retention shoulder where bracket leg locks behind flange J-return
 
-  const lShape = new THREE.Shape();
-  lShape.moveTo(startOff + legInner, -legLen);
-  lShape.lineTo(startOff + legOuter - legChamfer, -legLen);
-  lShape.lineTo(startOff + legOuter, -legLen + legChamfer);
-  lShape.lineTo(startOff + legOuter, startOff);
-  lShape.lineTo(startOff + sqSize, startOff);
-  lShape.lineTo(startOff + sqSize, startOff + sqSize);
-  lShape.lineTo(startOff, startOff + sqSize);
-  lShape.lineTo(startOff, startOff + legOuter);
-  lShape.lineTo(-legLen + legChamfer, startOff + legOuter);
-  lShape.lineTo(-legLen, startOff + legOuter - legChamfer);
-  lShape.lineTo(-legLen, startOff + legInner);
-  lShape.lineTo(startOff, startOff + legInner);
-  lShape.lineTo(startOff, startOff);
-  lShape.lineTo(startOff + legInner, startOff);
-  lShape.closePath();
+  // 1. Recessed L-frame base plate + two chamfered insertion legs with retention catch step
+  const legsShape = new THREE.Shape();
+  legsShape.moveTo(startOff + legInner + legInnerChamfer, -legLen);
+  legsShape.lineTo(startOff + legOuter - legOuterChamfer, -legLen);
+  legsShape.lineTo(startOff + legOuter, -legLen + legOuterChamfer);
+  // Subtle retention shoulder tab along outer edge of vertical leg
+  legsShape.lineTo(startOff + legOuter, -8.5);
+  legsShape.lineTo(startOff + legOuter + catchNotch, -6.5);
+  legsShape.lineTo(startOff + legOuter + catchNotch, startOff + 1.0);
+  // Corner square backing (flush behind raised front pad)
+  legsShape.lineTo(startOff + sqSize - 2.5, startOff + 1.0);
+  legsShape.lineTo(startOff + sqSize, startOff + 3.5);
+  legsShape.lineTo(startOff + sqSize, startOff + sqSize - 3.0);
+  legsShape.lineTo(startOff + sqSize - 3.0, startOff + sqSize);
+  legsShape.lineTo(startOff + 3.5, startOff + sqSize);
+  legsShape.lineTo(startOff + 1.0, startOff + sqSize - 2.5);
+  // Subtle retention shoulder tab along outer edge of horizontal leg
+  legsShape.lineTo(startOff + 1.0, startOff + legOuter + catchNotch);
+  legsShape.lineTo(-6.5, startOff + legOuter + catchNotch);
+  legsShape.lineTo(-8.5, startOff + legOuter);
+  legsShape.lineTo(-legLen + legOuterChamfer, startOff + legOuter);
+  legsShape.lineTo(-legLen, startOff + legOuter - legOuterChamfer);
+  legsShape.lineTo(-legLen, startOff + legInner + legInnerChamfer);
+  legsShape.lineTo(-legLen + legInnerChamfer, startOff + legInner);
+  legsShape.lineTo(startOff + legInner, startOff + legInner);
+  legsShape.lineTo(startOff + legInner, -legLen + legInnerChamfer);
+  legsShape.closePath();
 
-  // Authentic teardrop bolt hole: ROUND lobe facing OUTWARD (+1, +1), POINTED tip facing INWARD (-1, -1) toward duct corner!
-  const cx = startOff + sqSize * 0.56;
-  const cy = startOff + sqSize * 0.56;
-  const rBig = Math.min(5.2, sqSize * 0.2);
-  const rTip = rBig * 0.36;
-  const tipDist = rBig * 1.68;
-  const hole = new THREE.Path();
-  const dirAngle = -3 * Math.PI / 4; // Pointed V-tip aims straight toward inner duct corner (0, 0)
-  const startA = dirAngle + Math.PI * 0.36;
-  const endA = dirAngle + Math.PI * 1.64;
-  const steps = 20;
-  for (let i = 0; i <= steps; i++) {
-    const a = startA + ((endA - startA) * i) / steps;
-    const px = cx + Math.cos(a) * rBig;
-    const py = cy + Math.sin(a) * rBig;
-    if (i === 0) hole.moveTo(px, py);
-    else hole.lineTo(px, py);
-  }
-  const tipCx = cx + Math.cos(dirAngle) * tipDist;
-  const tipCy = cy + Math.sin(dirAngle) * tipDist;
-  const tipSteps = 10;
-  for (let i = 0; i <= tipSteps; i++) {
-    const a = dirAngle - Math.PI * 0.45 + (Math.PI * 0.9 * i) / tipSteps;
-    hole.lineTo(tipCx + Math.cos(a) * rTip, tipCy + Math.sin(a) * rTip);
-  }
-  hole.closePath();
-  lShape.holes.push(hole);
+  // Authentic teardrop / rounded-diamond bolt hole:
+  // ROUND lobe facing OUTWARD (+1, +1), crisp POINTED V-tip facing INWARD (-1, -1) toward duct corner!
+  const makeTeardropHole = (): THREE.Path => {
+    const cx = startOff + sqSize * 0.56;
+    const cy = startOff + sqSize * 0.56;
+    const rBig = Math.min(5.4, sqSize * 0.21);
+    const rTip = rBig * 0.32;
+    const tipDist = rBig * 1.72;
+    const hole = new THREE.Path();
+    const dirAngle = (-3 * Math.PI) / 4; // aims straight toward inner duct corner (0, 0)
+    const startA = dirAngle + Math.PI * 0.34;
+    const endA = dirAngle + Math.PI * 1.66;
+    const steps = 20;
+    for (let i = 0; i <= steps; i++) {
+      const a = startA + ((endA - startA) * i) / steps;
+      const px = cx + Math.cos(a) * rBig;
+      const py = cy + Math.sin(a) * rBig;
+      if (i === 0) hole.moveTo(px, py);
+      else hole.lineTo(px, py);
+    }
+    const tipCx = cx + Math.cos(dirAngle) * tipDist;
+    const tipCy = cy + Math.sin(dirAngle) * tipDist;
+    const tipSteps = 8;
+    for (let i = 0; i <= tipSteps; i++) {
+      const a = dirAngle - Math.PI * 0.42 + (Math.PI * 0.84 * i) / tipSteps;
+      hole.lineTo(tipCx + Math.cos(a) * rTip, tipCy + Math.sin(a) * rTip);
+    }
+    hole.closePath();
+    return hole;
+  };
+
+  legsShape.holes.push(makeTeardropHole());
+
+  // 2. Raised stepped corner pad (sits FLUSH with flange front face, with rounded outer corner + 45° chamfered inner step!)
+  const padIn = startOff + 0.6;
+  const padOut = startOff + sqSize - 0.3;
+  const innerCham = Math.min(6.0, sqSize * 0.22);
+  const outerRad = 2.8;
+  const padShape = new THREE.Shape();
+  padShape.moveTo(padIn + innerCham, padIn);
+  padShape.lineTo(padOut - 1.2, padIn);
+  padShape.lineTo(padOut, padIn + 1.2);
+  padShape.lineTo(padOut, padOut - outerRad);
+  padShape.quadraticCurveTo(padOut, padOut, padOut - outerRad, padOut);
+  padShape.lineTo(padIn + 1.2, padOut);
+  padShape.lineTo(padIn, padOut - 1.2);
+  padShape.lineTo(padIn, padIn + innerCham);
+  padShape.closePath();
+  padShape.holes.push(makeTeardropHole());
+
+  // 3. Stamped longitudinal stiffening ribs on BOTH legs (raised toward the channel interior!)
+  const legMid = startOff + (legInner + legOuter) * 0.5;
+  const ribHalfW = Math.min(2.3, (legOuter - legInner) * 0.16);
+  const ribStart = -3.0;
+  const ribEnd = -(legLen - Math.max(legOuterChamfer + 2.5, 8.0));
+
+  const makeRibRect = (x0: number, y0: number, x1: number, y1: number): THREE.Shape => {
+    const s = new THREE.Shape();
+    s.moveTo(x0, y0);
+    s.lineTo(x1, y0);
+    s.lineTo(x1, y1);
+    s.lineTo(x0, y1);
+    s.closePath();
+    return s;
+  };
+
+  const vRibShape =
+    ribStart - ribEnd > 6
+      ? makeRibRect(legMid - ribHalfW, ribEnd, legMid + ribHalfW, ribStart)
+      : null;
+  const hRibShape =
+    ribStart - ribEnd > 6
+      ? makeRibRect(ribEnd, legMid - ribHalfW, ribStart, legMid + ribHalfW)
+      : null;
 
   const corners: { id: string; sx: 1 | -1; sy: 1 | -1 }[] = [
     { id: 'TR', sx: 1, sy: 1 },
@@ -737,49 +873,91 @@ function buildTdcCornerBrackets(
   const diagShiftMm = explodeRatio * maxDiagMm;
   const axialShiftMm = explodeRatio * 48;
 
+  // Local +Z points OUTWARD along endSign (from behind flange toward front face z0)
+  const zLegRear = z0 - endSign * (t + gap + legThick);
+  const zPadRear = z0 - endSign * padThick;
+
   return corners.map((c) => {
-    const geom = new THREE.ExtrudeGeometry(lShape, {
-      depth: bracketThick,
-      bevelEnabled: false,
-      curveSegments: 16,
-    });
-    const zBack = endSign === 1 ? z0 - t - gap - bracketThick : z0 + t + gap;
-    const posAttr = geom.getAttribute('position');
-    const flipWinding = c.sx * c.sy < 0;
-    for (let i = 0; i < posAttr.count; i++) {
-      const lx = posAttr.getX(i);
-      const ly = posAttr.getY(i);
-      const lz = posAttr.getZ(i);
-      posAttr.setXYZ(
-        i,
-        (c.sx * hw + c.sx * lx) * MM_TO_M,
-        (c.sy * hh + c.sy * ly) * MM_TO_M,
-        (zBack + lz) * MM_TO_M
+    const parts: THREE.BufferGeometry[] = [];
+
+    // Recessed L-legs base plate (sits cleanly behind TDC flange face inside C-channel)
+    parts.push(
+      transformCornerExtrudeMmToWorldM(
+        new THREE.ExtrudeGeometry(legsShape, {
+          depth: legThick,
+          bevelEnabled: false,
+          curveSegments: 16,
+        }),
+        c.sx,
+        c.sy,
+        hw,
+        hh,
+        zLegRear,
+        endSign
+      )
+    );
+
+    // Raised stepped corner pad (front face sits FLUSH at z = z0 with stamped bevel edges!)
+    parts.push(
+      transformCornerExtrudeMmToWorldM(
+        new THREE.ExtrudeGeometry(padShape, {
+          depth: Math.max(0.8, padThick - 0.5),
+          bevelEnabled: true,
+          bevelThickness: 0.42,
+          bevelSize: 0.45,
+          bevelSegments: 2,
+          curveSegments: 16,
+        }),
+        c.sx,
+        c.sy,
+        hw,
+        hh,
+        zPadRear,
+        endSign
+      )
+    );
+
+    // Embossed stiffening ribs along both legs (protruding backward into hollow C-channel)
+    if (vRibShape) {
+      parts.push(
+        transformCornerExtrudeMmToWorldM(
+          new THREE.ExtrudeGeometry(vRibShape, {
+            depth: 1.4,
+            bevelEnabled: true,
+            bevelThickness: 0.55,
+            bevelSize: 0.75,
+            bevelSegments: 2,
+          }),
+          c.sx,
+          c.sy,
+          hw,
+          hh,
+          zLegRear - endSign * 1.4,
+          endSign
+        )
       );
     }
-    if (flipWinding) {
-      const idx = geom.getIndex();
-      if (idx) {
-        for (let i = 0; i < idx.count; i += 3) {
-          const b = idx.getX(i + 1);
-          const d = idx.getX(i + 2);
-          idx.setX(i + 1, d);
-          idx.setX(i + 2, b);
-        }
-        idx.needsUpdate = true;
-      } else {
-        for (let i = 0; i < posAttr.count; i += 3) {
-          const x1 = posAttr.getX(i + 1), y1 = posAttr.getY(i + 1), z1 = posAttr.getZ(i + 1);
-          const x2 = posAttr.getX(i + 2), y2 = posAttr.getY(i + 2), z2 = posAttr.getZ(i + 2);
-          posAttr.setXYZ(i + 1, x2, y2, z2);
-          posAttr.setXYZ(i + 2, x1, y1, z1);
-        }
-      }
+    if (hRibShape) {
+      parts.push(
+        transformCornerExtrudeMmToWorldM(
+          new THREE.ExtrudeGeometry(hRibShape, {
+            depth: 1.4,
+            bevelEnabled: true,
+            bevelThickness: 0.55,
+            bevelSize: 0.75,
+            bevelSegments: 2,
+          }),
+          c.sx,
+          c.sy,
+          hw,
+          hh,
+          zLegRear - endSign * 1.4,
+          endSign
+        )
+      );
     }
-    posAttr.needsUpdate = true;
-    geom.computeVertexNormals();
-    geom.computeBoundingBox();
-    geom.computeBoundingSphere();
+
+    const geom = mergeSimpleGeometries(parts);
 
     return {
       id: `${endKey}-tdc-bracket-${c.id}`,
@@ -849,6 +1027,58 @@ function pushBox(
 }
 
 /**
+ * Emits a triangular rolled-steel inner root fillet prism along the inside junction
+ * where the flat flange face meets the rear wrap leg (authentic rolled V-angle profile).
+ */
+function pushAngleRootFillet(
+  buf: ZoneBuf,
+  axis: 'x' | 'y',
+  spanMin: number,
+  spanMax: number,
+  cornerPerp: number,
+  perpDir: 1 | -1,
+  zCorner: number,
+  zDir: 1 | -1,
+  filletSize: number
+): void {
+  if (spanMax - spanMin < 2 || filletSize < 0.4) return;
+  const f = filletSize;
+  const p0 = cornerPerp;
+  const p1 = cornerPerp + perpDir * f;
+  const z0 = zCorner;
+  const z1 = zCorner + zDir * f;
+  const uS = 1 / 280;
+  const len = (spanMax - spanMin) * uS;
+  const diag = Math.SQRT2 * f * uS;
+
+  const to3 = (s: number, p: number, z: number): [number, number, number] =>
+    axis === 'x' ? [s, p, z] : [p, s, z];
+
+  // Emit single sloped bevel quad facing (+perpDir, +zDir)
+  // Compute consistent outward orientation using cross product test
+  const a = to3(spanMin, p1, z0);
+  const b = to3(spanMax, p1, z0);
+  const c = to3(spanMax, p0, z1);
+  const d = to3(spanMin, p0, z1);
+
+  const abx = b[0] - a[0], aby = b[1] - a[1], abz = b[2] - a[2];
+  const adx = d[0] - a[0], ady = d[1] - a[1], adz = d[2] - a[2];
+  const nx = aby * adz - abz * ady;
+  const ny = abz * adx - abx * adz;
+  const nz = abx * ady - aby * adx;
+  const wantX = axis === 'y' ? perpDir : 0;
+  const wantY = axis === 'x' ? perpDir : 0;
+  const wantZ = zDir;
+  const dot = nx * wantX + ny * wantY + nz * wantZ;
+
+  if (dot >= 0) {
+    pushQuad(buf, a, [0, 0], b, [len, 0], c, [len, diag], d, [0, diag]);
+  } else {
+    pushQuad(buf, a, [0, 0], d, [0, diag], c, [len, diag], b, [len, 0]);
+  }
+}
+
+/**
  * Emits a rear axial wrap leg along a horizontal (X) or vertical (Y) bar with true 45° tail corner
  * relief chamfers (`góc vát ở phần thừa đuôi cánh ôm phía sau để không bị cấn góc`)!
  */
@@ -865,14 +1095,10 @@ function pushChamferedRearLeg(
 ): void {
   const halfSpan = (spanMax - spanMin) * 0.5;
   const depth = Math.abs(zTail - zRoot);
-  const c = Math.max(0, Math.min(chamferMm, halfSpan * 0.35, depth * 0.72));
+  const c = Math.max(0, Math.min(chamferMm, halfSpan * 0.35, depth * 0.78));
   const dirZ = zTail >= zRoot ? 1 : -1;
   const zCh = zTail - dirZ * c; // Z where 45° corner bevel begins
 
-  // Cross-section polygon in (span s, z):
-  //   0: (spanMin, zRoot) -> 1: (spanMax, zRoot) -> 2: (spanMax, zCh) -> 3: (spanMax - c, zTail)
-  //   -> 4: (spanMin + c, zTail) -> 5: (spanMin, zCh)
-  // Order strictly CCW in (s, z) assuming dirZ = +1; if dirZ = -1, reverse to keep outward normals!
   const rawPts: [number, number][] =
     c > 0.25
       ? [
@@ -895,8 +1121,6 @@ function pushChamferedRearLeg(
   const to3 = (s: number, p: number, z: number): [number, number, number] =>
     axis === 'x' ? [s, p, z] : [p, s, z];
 
-  // For axis='x': (s=X, p=Y, z=Z). (X × Z) = -Y! So CCW in (X, Z) has normal -Y (at perpMin) and +Y (at perpMax reversed).
-  // For axis='y': (s=Y, p=X, z=Z). (Y × Z) = +X! So CCW in (Y, Z) has normal +X (at perpMax) and -X (at perpMin reversed).
   const pA = Math.min(perpMin, perpMax);
   const pB = Math.max(perpMin, perpMax);
   const n = poly.length;
@@ -905,11 +1129,9 @@ function pushChamferedRearLeg(
   for (let i = 1; i < n - 1; i++) {
     const a = poly[0], b = poly[i], d = poly[i + 1];
     if (axis === 'x') {
-      // -Y face at pA uses CCW (a, b, d); +Y face at pB uses reversed (a, d, b)
       pushTri(buf, to3(a[0], pA, a[1]), [a[0] * uS, a[1] * uS], to3(b[0], pA, b[1]), [b[0] * uS, b[1] * uS], to3(d[0], pA, d[1]), [d[0] * uS, d[1] * uS]);
       pushTri(buf, to3(a[0], pB, a[1]), [a[0] * uS, a[1] * uS], to3(d[0], pB, d[1]), [d[0] * uS, d[1] * uS], to3(b[0], pB, b[1]), [b[0] * uS, b[1] * uS]);
     } else {
-      // +X face at pB uses CCW (a, b, d); -X face at pA uses reversed (a, d, b)
       pushTri(buf, to3(a[0], pB, a[1]), [a[0] * uS, a[1] * uS], to3(b[0], pB, b[1]), [b[0] * uS, b[1] * uS], to3(d[0], pB, d[1]), [d[0] * uS, d[1] * uS]);
       pushTri(buf, to3(a[0], pA, a[1]), [a[0] * uS, a[1] * uS], to3(d[0], pA, d[1]), [d[0] * uS, d[1] * uS], to3(b[0], pA, b[1]), [b[0] * uS, b[1] * uS]);
     }
@@ -922,9 +1144,6 @@ function pushChamferedRearLeg(
     const len = Math.hypot(b[0] - a[0], b[1] - a[1]) * uS;
     const thickU = (pB - pA) * uS;
     if (axis === 'x') {
-      // Edge (a -> b) in CCW (X, Z) crossed with (+Y) points OUTWARD!
-      // Verify: (b-a) = (+X) => (+X) × (+Y) = +Z? Wait: at bottom edge (a->b) = (+X) with interior at +Z -> outward is -Z!
-      // Check (+Y) × (+X) = -Z! So quad (a(pA), a(pB), b(pB), b(pA)) -> (pB-pA) × (b-a) = (+Y) × (+X) = -Z = OUTWARD!
       pushQuad(
         buf,
         to3(a[0], pA, a[1]), [0, 0],
@@ -933,9 +1152,6 @@ function pushChamferedRearLeg(
         to3(b[0], pA, b[1]), [0, len]
       );
     } else {
-      // Edge (a -> b) = (+Y) with interior at +Z -> outward is -Z. (+Y) × (+X) = -Z!
-      // So (b-a) × (pB-pA) = (+Y) × (+X) = -Z = OUTWARD!
-      // Quad (a(pA), b(pA), b(pB), a(pB)) -> (b-a) × (+X) = OUTWARD!
       pushQuad(
         buf,
         to3(a[0], pA, a[1]), [0, 0],
@@ -948,9 +1164,10 @@ function pushChamferedRearLeg(
 }
 
 /**
- * Builds detached Bích V rời (Quay ngoài thường W+5, Quay ngoài EI W-3, V80×30 cánh 30 lọt lòng W-3,
- * hoặc Quay trong phủ bì W-3 × H-3) with:
+ * Builds detached Bích V rời matching workshop photos (`bích_V_quay_ngoài_vát_góc_thừa.jpg`,
+ * `cận_cảnh_góc_ngoài_bích_V_quay_ngoài.jpg`, `bích_v_quay_trong_nhìn_từ_ngoài.jpg`):
  * - 2 full-length outer bars (Top/Bottom) + 2 clear-span inner bars (Left/Right) — ZERO 45° miter on front face!
+ * - Rolled-steel inner root fillet along all 4 bars for authentic angle-iron cross-section
  * - 45° relief bevels ONLY on the rear wrap-leg tails so corners never clash
  * - ZERO bolt holes!
  */
@@ -980,10 +1197,8 @@ function buildBichVFrame(
   let dzFront: number;
   let dzBack: number;
   let legAtInner: boolean;
-  let legInnerOff: number; // radial band of axial leg relative to innerW/2 or outerW/2
 
   if (conn.type === 'bich_v_in') {
-    // Bích V quay trong: Phủ bì = W-3 × H-3 (thay thế TDC/TDF quay trong)
     outerW = Math.max(40, W - 3);
     outerH = Math.max(40, H - 3);
     const lf = Math.min(legFace, Math.min(outerW, outerH) * 0.42);
@@ -991,10 +1206,8 @@ function buildBichVFrame(
     innerH = outerH - 2 * lf;
     dzFront = 0;
     dzBack = -tv;
-    legAtInner = false; // axial leg sits along OUTER edge (outer - tv .. outer) inside duct walls
-    legInnerOff = 0;
+    legAtInner = false;
   } else if (spec === 'V80x30' || conn.bichVOutStyle === 'ei') {
-    // V80×30 (cánh 80 quay ngoài, cánh 30 lọt lòng W-3 × H-3) & Bích V EI quay ngoài (W-3 × H-3)
     const axialOuterW = Math.max(40, W - 3);
     const axialOuterH = Math.max(40, H - 3);
     innerW = Math.max(24, axialOuterW - 2 * tv);
@@ -1003,10 +1216,8 @@ function buildBichVFrame(
     outerH = innerH + 2 * legFace;
     dzBack = gap;
     dzFront = gap + tv;
-    legAtInner = true; // axial leg sits at [innerW/2 .. innerW/2 + tv] = [(W-3)/2 - tv .. (W-3)/2] (lọt lòng W-3!)
-    legInnerOff = 0;
+    legAtInner = true;
   } else {
-    // Bích V quay ngoài ống thường (V30/V40/V50): Lòng trong = W+5 × H+5, gờ mí tôn +8 mm lật phía trước
     innerW = W + 5;
     innerH = H + 5;
     outerW = innerW + 2 * legFace;
@@ -1014,7 +1225,6 @@ function buildBichVFrame(
     dzFront = -(t + gap);
     dzBack = dzFront - tv;
     legAtInner = true;
-    legInnerOff = 0;
   }
 
   const hOW = outerW / 2, hOH = outerH / 2;
@@ -1022,6 +1232,7 @@ function buildBichVFrame(
   const zF = zW(dzFront);
   const zB = zW(dzBack);
   const zTail = zW(dzFront - legAxial);
+  const rearZDir: 1 | -1 = endSign === 1 ? -1 : 1;
 
   // 1. Front flat flange face: 2 full-length outer bars (Top & Bottom) + 2 clear-span inner bars (Left & Right)
   pushBox(zb, -hOW, hOW, hIH, hOH, zB, zF); // Top (phủ bì)
@@ -1029,22 +1240,34 @@ function buildBichVFrame(
   pushBox(zb, -hOW, -hIW, -hIH + buttGap, hIH - buttGap, zB, zF); // Left (lọt lòng)
   pushBox(zb, hIW, hOW, -hIH + buttGap, hIH - buttGap, zB, zF); // Right (lọt lòng)
 
-  // 2. Rear axial wrap legs with 45° corner tail relief chamfers (không cấn góc!)
-  const tailChamfer = Math.min(legAxial * 0.45, Math.max(8, tv * 3.2));
+  // 2. Rear axial wrap legs with 45° corner tail relief chamfers + rolled-steel inner root fillets
+  const tailChamfer = Math.min(legAxial * 0.55, Math.max(11, tv * 3.8));
+  const filletMm = Math.min(2.6, tv * 0.85, legFace * 0.12);
   if (legAtInner) {
-    const r0X = hIW + legInnerOff;
-    const r0Y = hIH + legInnerOff;
-    // Top & Bottom inner legs span [-r0X - tv, +r0X + tv] with 45° tail bevel; Left & Right fit cleanly between [-r0Y + buttGap, +r0Y - buttGap]
+    const r0X = hIW;
+    const r0Y = hIH;
     pushChamferedRearLeg(zb, 'x', -r0X - tv, r0X + tv, r0Y, r0Y + tv, zB, zTail, tailChamfer);
     pushChamferedRearLeg(zb, 'x', -r0X - tv, r0X + tv, -r0Y - tv, -r0Y, zB, zTail, tailChamfer);
     pushChamferedRearLeg(zb, 'y', -r0Y + buttGap, r0Y - buttGap, -r0X - tv, -r0X, zB, zTail, tailChamfer);
     pushChamferedRearLeg(zb, 'y', -r0Y + buttGap, r0Y - buttGap, r0X, r0X + tv, zB, zTail, tailChamfer);
+
+    // Rolled angle inner root fillets facing outward (+Y/-Y/+X/-X) toward flange face
+    pushAngleRootFillet(zb, 'x', -r0X - tv, r0X + tv, r0Y + tv, 1, zB, rearZDir, filletMm);
+    pushAngleRootFillet(zb, 'x', -r0X - tv, r0X + tv, -r0Y - tv, -1, zB, rearZDir, filletMm);
+    pushAngleRootFillet(zb, 'y', -r0Y + buttGap, r0Y - buttGap, -r0X - tv, -1, zB, rearZDir, filletMm);
+    pushAngleRootFillet(zb, 'y', -r0Y + buttGap, r0Y - buttGap, r0X + tv, 1, zB, rearZDir, filletMm);
   } else {
     // Inward V-flange: axial legs sit along OUTER perimeter (hOW - tv .. hOW, hOH - tv .. hOH)
     pushChamferedRearLeg(zb, 'x', -hOW, hOW, hOH - tv, hOH, zB, zTail, tailChamfer);
     pushChamferedRearLeg(zb, 'x', -hOW, hOW, -hOH, -hOH + tv, zB, zTail, tailChamfer);
     pushChamferedRearLeg(zb, 'y', -hOH + tv + buttGap, hOH - tv - buttGap, -hOW, -hOW + tv, zB, zTail, tailChamfer);
     pushChamferedRearLeg(zb, 'y', -hOH + tv + buttGap, hOH - tv - buttGap, hOW - tv, hOW, zB, zTail, tailChamfer);
+
+    // Inner root fillets facing INWARD toward duct center
+    pushAngleRootFillet(zb, 'x', -hOW + tv, hOW - tv, hOH - tv, -1, zB, rearZDir, filletMm);
+    pushAngleRootFillet(zb, 'x', -hOW + tv, hOW - tv, -hOH + tv, 1, zB, rearZDir, filletMm);
+    pushAngleRootFillet(zb, 'y', -hOH + tv + buttGap, hOH - tv - buttGap, -hOW + tv, 1, zB, rearZDir, filletMm);
+    pushAngleRootFillet(zb, 'y', -hOH + tv + buttGap, hOH - tv - buttGap, hOW - tv, -1, zB, rearZDir, filletMm);
   }
 
   const geom = new THREE.BufferGeometry();
@@ -1077,9 +1300,10 @@ function buildBichVFrame(
 }
 
 /**
- * Builds detached Bích U rời (1.5 / 2 / 3 mm, NO bolt holes):
+ * Builds detached Bích U rời matching workshop photos (`bích_U_mặt_cắt.jpg`, `cận_cảnh_góc_bích_U.jpg`):
  * - 2 full-length outer bars + 2 clear-span inner bars (ZERO 45° miter on front face!)
- * - Asymmetric U-channel: Cánh ôm thân (wrapLeg) × Mặt bích phẳng (flangeFace) × Gờ bẻ ngoài cố định 10 mm quay ngược về phía thân ống
+ * - Asymmetric bent U-channel: Cánh ôm thân (wrapLeg) × Mặt bích phẳng (flangeFace) × Gờ bẻ ngoài cố định 10 mm quay về thân
+ * - Continuous 10 mm outer return lip meeting cleanly at all 4 outer 90° corners (zero corner gap!)
  * - 45° corner relief bevels on the rear wrap-leg tails so corners never clash!
  */
 function buildBichUFrame(
@@ -1112,6 +1336,7 @@ function buildBichUFrame(
   const zB = zW(-tu);
   const zWrapTail = zW(-wrapLeg);
   const zLipTail = zW(-outerLip);
+  const rearZDir: 1 | -1 = endSign === 1 ? -1 : 1;
 
   // 1. Flat flange face: 2 full-length outer bars (Top/Bottom) + 2 clear-span inner bars (Left/Right)
   pushBox(zb, -hOW, hOW, hIH, hOH, zB, zF);
@@ -1119,18 +1344,24 @@ function buildBichUFrame(
   pushBox(zb, -hOW, -hIW, -hIH + buttGap, hIH - buttGap, zB, zF);
   pushBox(zb, hIW, hOW, -hIH + buttGap, hIH - buttGap, zB, zF);
 
-  // 2. Rear inner wrap leg (Cánh ôm thân) with 45° tail corner relief bevels
-  const wrapChamfer = Math.min(wrapLeg * 0.45, Math.max(8, tu * 3.5));
+  // 2. Rear inner wrap leg (Cánh ôm thân) with 45° tail corner relief bevels + subtle press-brake bend fillet
+  const wrapChamfer = Math.min(wrapLeg * 0.52, Math.max(10, tu * 4.0));
+  const bendFillet = Math.min(1.6, tu * 0.75);
   pushChamferedRearLeg(zb, 'x', -hIW - tu, hIW + tu, hIH, hIH + tu, zB, zWrapTail, wrapChamfer);
   pushChamferedRearLeg(zb, 'x', -hIW - tu, hIW + tu, -hIH - tu, -hIH, zB, zWrapTail, wrapChamfer);
   pushChamferedRearLeg(zb, 'y', -hIH + buttGap, hIH - buttGap, -hIW - tu, -hIW, zB, zWrapTail, wrapChamfer);
   pushChamferedRearLeg(zb, 'y', -hIH + buttGap, hIH - buttGap, hIW, hIW + tu, zB, zWrapTail, wrapChamfer);
 
-  // 3. Fixed 10 mm outer return lip (Gờ bẻ ngoài cố định 10 mm quay ngược về phía thân ống!)
+  pushAngleRootFillet(zb, 'x', -hIW - tu, hIW + tu, hIH + tu, 1, zB, rearZDir, bendFillet);
+  pushAngleRootFillet(zb, 'x', -hIW - tu, hIW + tu, -hIH - tu, -1, zB, rearZDir, bendFillet);
+  pushAngleRootFillet(zb, 'y', -hIH + buttGap, hIH - buttGap, -hIW - tu, -1, zB, rearZDir, bendFillet);
+  pushAngleRootFillet(zb, 'y', -hIH + buttGap, hIH - buttGap, hIW + tu, 1, zB, rearZDir, bendFillet);
+
+  // 3. Fixed 10 mm outer return lip — continuous ALL THE WAY to all 4 outer 90° corners (per cận_cảnh_góc_bích_U.jpg!)
   pushBox(zb, -hOW, hOW, hOH - tu, hOH, zLipTail, zB);
   pushBox(zb, -hOW, hOW, -hOH, -hOH + tu, zLipTail, zB);
-  pushBox(zb, -hOW, -hOW + tu, -hIH + buttGap, hIH - buttGap, zLipTail, zB);
-  pushBox(zb, hOW - tu, hOW, -hIH + buttGap, hIH - buttGap, zLipTail, zB);
+  pushBox(zb, -hOW, -hOW + tu, -hOH + tu + buttGap, hOH - tu - buttGap, zLipTail, zB);
+  pushBox(zb, hOW - tu, hOW, -hOH + tu + buttGap, hOH - tu - buttGap, zLipTail, zB);
 
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.Float32BufferAttribute(zb.positions, 3));
@@ -1268,7 +1499,7 @@ function buildLcctScreen(
 /**
  * Builds removable End Cap panel (`1-B`, `1-E`, `1-F`...):
  * - Flat sheet cover with optional straight embossed ribs (synced to stiffenerRibs & ribPitchMm, NO X-ribs!)
- * - Per-edge configurable seam: Mí đơn (+7 mm vát 45°), Hàn chập (7–25 mm gập ôm ngoài), hoặc Hàn đấu đầu (0–0)
+ * - Per-edge configurable seam: Mí đơn (+7 mm vát 8° ~1 mm), Hàn chập (7–25 mm gập ôm ngoài), hoặc Hàn đấu đầu (0–0)
  * - Stamped inner-face partCode label facing into the duct interior!
  */
 function buildEndCapPanel(
@@ -1278,13 +1509,14 @@ function buildEndCapPanel(
   config: DuctConfig,
   seamLockProgress: number,
   explodeRatio: number,
-  ribPitchMm = 210
+  ribPitchMm = 210,
+  overridePartCode?: string
 ): BuiltAccessoryMesh {
   const { W, H, L, thickness: t, stiffenerRibs } = config;
   const gap = Math.max(0.24, t * 0.28);
   const uvScale = 1 / 280;
   const z0 = endSign * (L / 2);
-  const partCode = getEndCapPartCode(config, endKey);
+  const partCode = overridePartCode ?? getEndCapPartCode(config, endKey);
 
   const hasAnyPitts = (['top', 'bottom', 'left', 'right'] as WallId[]).some(
     (w) => getEndCapEdgeSeam(conn, w) === 'pittsburgh'
@@ -1381,7 +1613,7 @@ function buildEndCapPanel(
     }
   }
 
-  // Per-edge seam lips around all 4 edges (Mí đơn +7 vát 45° | Hàn chập 7–25 mm | Hàn đấu đầu 0–0)
+  // Per-edge seam lips around all 4 edges (Mí đơn +7 vát 8° ~1 mm | Hàn chập 7–25 mm | Hàn đấu đầu 0–0)
   const walls: WallId[] = ['top', 'bottom', 'left', 'right'];
   for (const wall of walls) {
     const edgeSeam = getEndCapEdgeSeam(conn, wall);
@@ -1398,10 +1630,10 @@ function buildEndCapPanel(
     ];
 
     if (edgeSeam === 'pittsburgh') {
-      // Male +7 mm lip bent 90° backward with 45° corner chamfers (Zone 2 = Blue)
+      // Male +7 mm lip bent 90° backward with gentle 8° corner bevel (~1.0 mm inset)
       const lipBuf = zoneBuffers[2];
       const lipLen = 7.0;
-      const chamfer = Math.min(lipLen, rootHalf * 0.3);
+      const chamfer = Math.min(lipLen * Math.tan((8 * Math.PI) / 180), rootHalf * 0.25);
       const tipHalf = rootHalf - chamfer;
       const rOut = 0.5 * t, rIn = -0.5 * t;
       const dzRoot = dzOuter - 0.5 * t;
@@ -1413,7 +1645,6 @@ function buildEndCapPanel(
       pushQuad(lipBuf, pt(-rootHalf, rIn, dzRoot), [0, 0], pt(-rootHalf, rOut, dzRoot), [t * uvScale, 0], pt(-tipHalf, rOut, dzTip), [t * uvScale, chamfer * uvScale], pt(-tipHalf, rIn, dzTip), [0, chamfer * uvScale]);
       pushQuad(lipBuf, pt(rootHalf, rIn, dzRoot), [0, 0], pt(tipHalf, rIn, dzTip), [0, chamfer * uvScale], pt(tipHalf, rOut, dzTip), [t * uvScale, chamfer * uvScale], pt(rootHalf, rOut, dzRoot), [t * uvScale, 0]);
     } else if (edgeSeam === 'weld_overlap') {
-      // Hàn chập (7–25 mm): flat overlap skirt wrapping cleanly outside duct wall (Zone 4 = Orange)
       const weldBuf = zoneBuffers[4];
       const lapLen = Math.max(7, Math.min(25, conn.endCapWeldOverlapWidth));
       const trim = t + gap;
@@ -1428,7 +1659,6 @@ function buildEndCapPanel(
       pushQuad(weldBuf, pt(-halfSpan, rIn, dzRoot), [0, 0], pt(-halfSpan, rOut, dzRoot), [t * uvScale, 0], pt(-halfSpan, rOut, dzTip), [t * uvScale, lapLen * uvScale], pt(-halfSpan, rIn, dzTip), [0, lapLen * uvScale]);
       pushQuad(weldBuf, pt(halfSpan, rIn, dzRoot), [0, 0], pt(halfSpan, rIn, dzTip), [0, lapLen * uvScale], pt(halfSpan, rOut, dzTip), [t * uvScale, lapLen * uvScale], pt(halfSpan, rOut, dzRoot), [t * uvScale, 0]);
     } else {
-      // Hàn đấu đầu (0–0): clean edge thickness cap colored Orange (Zone 4)
       const buttBuf = zoneBuffers[4];
       const rOut = 0.5 * t;
       pushQuad(buttBuf, pt(-rootHalf, rOut, dzOuter), [0, 0], pt(rootHalf, rOut, dzOuter), [rootHalf * 2 * uvScale, 0], pt(rootHalf, rOut, dzInner), [rootHalf * 2 * uvScale, t * uvScale], pt(-rootHalf, rOut, dzInner), [0, t * uvScale]);
@@ -1441,7 +1671,6 @@ function buildEndCapPanel(
   const unseamedShift = (1 - seamLockProgress) * maxUnseamedMm;
   const explodeShift = explodeRatio * maxExplodeMm;
 
-  // Inner-face marking (`1-B`, `1-E`, `1-F`...) stamped cleanly on the INSIDE of the End Cap
   const labelW = Math.max(60, Math.min(180, Math.min(W, H) * 0.42));
   const labelH = labelW * 0.46;
   const labelZ = z0 + endSign * (dzInner - 0.45);
@@ -1483,9 +1712,11 @@ export function buildAllEndAccessories(
   config: DuctConfig,
   seamLockProgress: number,
   explodeRatio: number,
-  ribPitchMm = 210
+  ribPitchMm = 210,
+  foldGraph?: ResolvedFoldGraph
 ): BuiltAccessoryMesh[] {
   const { W, H, L, thickness: t, c1, c2 } = config;
+  const graph = foldGraph ?? resolveFoldGraph(config);
   const accessories: BuiltAccessoryMesh[] = [];
 
   const ends: { key: 'c1' | 'c2'; endSign: 1 | -1; conn: EndConnectionConfig }[] = [
@@ -1510,11 +1741,26 @@ export function buildAllEndAccessories(
           accessories.push(...buildLcctScreen(key, endSign, W, H, L, t, explodeRatio));
         }
         break;
-      case 'end_cap':
-        accessories.push(
-          buildEndCapPanel(key, endSign, conn, config, seamLockProgress, explodeRatio, ribPitchMm)
-        );
+      case 'end_cap': {
+        // Emit detached End Cap panel ONLY when it is NOT merged into any body wall via 'bend'!
+        const capFace = key === 'c1' ? 'cap_c1' : 'cap_c2';
+        const comp = graph.faceToComponent.get(capFace);
+        if (!comp || comp.isPureEndCap) {
+          accessories.push(
+            buildEndCapPanel(
+              key,
+              endSign,
+              conn,
+              config,
+              seamLockProgress,
+              explodeRatio,
+              ribPitchMm,
+              comp?.partCode
+            )
+          );
+        }
         break;
+      }
       case 'nep_c':
       case 'plain':
       case 'be_chan':

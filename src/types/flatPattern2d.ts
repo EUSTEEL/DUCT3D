@@ -5,9 +5,58 @@
  * while fittings without 2D unfolding simply disable the 2D toggle.
  */
 
+import type { EdgeJoinMode, FoldEdgeId } from './duct';
+
 export interface Point2D {
   x: number; // mm
   y: number; // mm
+}
+
+export type VertexFeatureTag =
+  | 'body_corner'
+  | 'male_bevel'
+  | 'nep_c_chamfer'
+  | 'tdc_notch'
+  | 'tdc_tdf_indent'
+  | 'bend_notch'
+  | 'flange_tip'
+  | 'seam_corner'
+  | 'custom';
+
+export interface EditableVertex2D {
+  id: string;
+  x: number; // mm (piece-local)
+  y: number; // mm (piece-local)
+  tag?: VertexFeatureTag;
+}
+
+export type SegmentFeatureKind =
+  | 'cut'
+  | 'male_bevel'
+  | 'nep_c_chamfer'
+  | 'tdc_step'
+  | 'bend_slot'
+  | 'flange_edge'
+  | 'seam_edge';
+
+export interface EditableSegment2D {
+  id: string;
+  fromIndex: number;
+  toIndex: number;
+  kind: 'line' | 'arc';
+  feature?: SegmentFeatureKind;
+}
+
+/**
+ * Open structured 2D contour representation (editable vertices + segments)
+ * instead of baked SVG path strings — enabling future interactive 2D bevel/notch
+ * editing and basic CAD drawing tools directly on the 2D blueprint.
+ */
+export interface EditableContour2D {
+  id: string;
+  closed: boolean;
+  vertices: EditableVertex2D[];
+  segments: EditableSegment2D[];
 }
 
 export interface Line2D {
@@ -15,6 +64,23 @@ export interface Line2D {
   y1: number;
   x2: number;
   y2: number;
+  label?: string;
+}
+
+export interface InteractiveEdge2D {
+  edgeId: FoldEdgeId;
+  mode: EdgeJoinMode;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+export interface OverlapRect2D {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
   label?: string;
 }
 
@@ -84,8 +150,9 @@ export interface FlatPatternPiece {
   name: string;
   subtitle: string;
   isEndCap: boolean;
+  isMergedTree?: boolean;
   endKey?: 'c1' | 'c2';
-  /** Active longitudinal seam corner IDs at Left (x=0) and Right (x=widthMm) edges of body pieces */
+  /** Active longitudinal seam corner IDs at Left (x=0) and Right (x=widthMm) edges of linear body pieces */
   leftCornerId?: 'TL' | 'TR' | 'BR' | 'BL';
   rightCornerId?: 'TL' | 'TR' | 'BR' | 'BL';
   /** Body Y boundaries inside piece-local coordinates (for 2D end C2/C1 interactive hit zones) */
@@ -99,7 +166,11 @@ export interface FlatPatternPiece {
   /** Placement origin on the global 2D nesting canvas (mm) */
   originX: number;
   originY: number;
-  /** Watertight clockwise outer laser-cut polygon (piece-local mm) */
+  /** Open editable outer cut contour (structured vertices & segments for future 2D CAD tools) */
+  outerContour: EditableContour2D;
+  /** Optional interior cutout contours (also exported on DXF layer CUT) */
+  innerContours?: EditableContour2D[];
+  /** Derived clockwise outer laser-cut polygon (piece-local mm, mirrors outerContour.vertices) */
   cutPolygon: Point2D[];
   /** Optional interior cutout loops (e.g., branch holes in later stages), also exported on DXF layer CUT */
   innerHoles?: Point2D[][];
@@ -111,7 +182,9 @@ export interface FlatPatternPiece {
   foldLines: Line2D[];
   /** Straight stiffener rib lines (parallel to C1 & C2, configurable pitch from Workshop Settings) */
   ribLines: Line2D[];
-  /** Wall face watermarks inside multi-wall pieces (TRÊN, TRÁI, DƯỚI, PHẢI) */
+  /** Interactive shared edges (bends & seams) clickable/right-clickable directly on 2D */
+  interactiveEdges?: InteractiveEdge2D[];
+  /** Wall face watermarks inside multi-wall pieces (TRÊN, TRÁI, DƯỚI, PHẢI, BỊT C1...) */
   wallLabels: WallRegionLabel2D[];
   /** Mechanical extension & dimension lines */
   dimensions: Dimension2D[];
@@ -121,6 +194,10 @@ export interface FlatPatternPiece {
   centerLabelPos: Point2D;
   /** Standard sheet (W×L with 0°/90° rotation) & roll-former (L_phôi) check */
   limitCheck: SheetLimitCheck2D;
+  /** Automatic 2D self-overlap check for free-merge unfolded nets */
+  hasOverlap2D?: boolean;
+  overlapWarning?: string;
+  overlapRects?: OverlapRect2D[];
   /** Viewing face note */
   viewingFaceNote: string;
 }

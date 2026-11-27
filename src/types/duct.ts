@@ -30,6 +30,9 @@ export type MaterialMode = 'realistic' | 'technical';
 
 export type WallId = 'bottom' | 'right' | 'top' | 'left';
 
+/** Any face in a 4-, 5-, or 6-face rectangular duct assembly */
+export type FaceId = WallId | 'cap_c1' | 'cap_c2';
+
 /**
  * Corner indices in cross-section looking from +Z toward -Z:
  * - TL: (-W/2, +H/2) between Left and Top
@@ -38,6 +41,23 @@ export type WallId = 'bottom' | 'right' | 'top' | 'left';
  * - BL: (-W/2, -H/2) between Bottom and Left
  */
 export type CornerId = 'TL' | 'TR' | 'BR' | 'BL';
+
+/** Shared edges between an End Cap (C1 or C2) and the 4 duct body walls */
+export type CapEdgeId =
+  | 'C1_top'
+  | 'C1_bottom'
+  | 'C1_left'
+  | 'C1_right'
+  | 'C2_top'
+  | 'C2_bottom'
+  | 'C2_left'
+  | 'C2_right';
+
+/** Any shared edge in the Face–Edge Graph (4 body edges + up to 8 end-cap edges) */
+export type FoldEdgeId = CornerId | CapEdgeId;
+
+/** Join mode of a shared edge between two adjacent faces */
+export type EdgeJoinMode = 'bend' | 'seam';
 
 export interface CornerSeamOverride {
   seamType?: SeamType;
@@ -111,6 +131,10 @@ export interface DuctConfig {
   thickness: SheetThickness; // mm
   autoSplit: boolean;
   splitMode: SplitMode;
+  /** Chế độ ghép mảnh tự do dựa trên đồ thị Mặt – Cạnh (Face–Edge Graph) */
+  freeMergeMode: boolean;
+  /** Trạng thái từng cạnh tiếp giáp ('bend' = Liền mảnh Chấn 90°, 'seam' = Tách mảnh Mí ghép) khi bật Ghép tự do */
+  customEdgeStates: Partial<Record<FoldEdgeId, EdgeJoinMode>>;
   globalSeamType: SeamType;
   weldOverlapWidth: number; // 7–25 mm (default 10 mm)
   swapSeamRoles: boolean; // Global Đảo mí kép ↔ mí đơn
@@ -148,12 +172,20 @@ export type SelectionTarget =
   | { kind: 'piece'; partCode: string }
   | { kind: 'end'; endKey: 'c1' | 'c2' }
   | { kind: 'seam'; cornerId: CornerId }
+  | { kind: 'edge'; edgeId: FoldEdgeId }
   | null;
 
 export interface ContextMenuState {
   x: number;
   y: number;
   target: NonNullable<SelectionTarget>;
+}
+
+export interface FreeMergeNotice {
+  message: string;
+  targetEdgeId: FoldEdgeId;
+  suggestedSplitEdgeId?: FoldEdgeId;
+  suggestedSplitLabel?: string;
 }
 
 export interface SplitRecommendation {
@@ -176,8 +208,10 @@ export interface PieceBlankInfo {
   partCode: string;
   name: string;
   isEndCap?: boolean;
+  isMergedTree?: boolean;
   endKey?: 'c1' | 'c2';
   walls: WallId[];
+  faces?: FaceId[];
   wallsLabel: string;
   wallSpanSum: number; // mm (pure duct walls without seam allowances)
   startSeamLabel: string;
@@ -189,12 +223,14 @@ export interface PieceBlankInfo {
   c2Allowance: number; // mm
   c2Label: string;
   baseLength: number; // mm (L or H)
-  developedWidth: number; // mm (total flat blank width across cross-section)
-  blankLength: number; // mm (L + c1Allowance + c2Allowance, or cap height + allowances)
-  bendCount: number; // number of 90° body bends
+  developedWidth: number; // mm (total flat blank width across X)
+  blankLength: number; // mm (total flat blank height across Y)
+  bendCount: number; // number of 90° internal bends
   areaM2: number; // m²
   cutOrientation: 'ngang_chuan' | 'doc_6000' | 'can_noi_c';
   cutNote: string;
+  hasOverlap2D?: boolean;
+  overlapWarning?: string;
 }
 
 export interface RibLayout {

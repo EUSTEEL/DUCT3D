@@ -1,12 +1,15 @@
 import { useEffect } from 'react';
 import {
+  AlertTriangle,
   ArrowLeftRight,
   CircleDot,
   Copy,
   Crosshair,
+  GitBranch,
   Layers,
   Lock,
   RotateCcw,
+  Scissors,
   Sliders,
   X,
 } from 'lucide-react';
@@ -24,6 +27,13 @@ import {
   getEndCapEdgeSeam,
   getEndNotchSummary,
 } from '../domain/endConnectionRules';
+import {
+  FACE_LABELS,
+  FOLD_EDGE_DEFS,
+  isBodyEdge,
+  resolveFoldGraph,
+  validateSetEdgeToBend,
+} from '../domain/foldGraph';
 import type {
   BeChanEdgeMode,
   BichUThickness,
@@ -32,8 +42,10 @@ import type {
   ContextMenuState,
   CornerId,
   DuctConfig,
+  EdgeJoinMode,
   EndConnectionConfig,
   EndConnectionType,
+  FoldEdgeId,
   SeamType,
   SelectionTarget,
   WallId,
@@ -45,6 +57,7 @@ import {
   BICH_V_SPECS,
   BICH_V_THICKNESSES,
 } from '../types/duct';
+import type { FlatPatternDocument } from '../types/flatPattern2d';
 import { NumericDraftInput } from './NumericDraftInput';
 
 const INTEGRAL_END_OPTIONS: { type: EndConnectionType; label: string; badge: string }[] = [
@@ -69,10 +82,14 @@ const WALL_ORDER: WallId[] = ['top', 'bottom', 'left', 'right'];
 export interface SelectionContextUIProps {
   config: DuctConfig;
   workshopSettings: WorkshopSettings;
+  flatPatternDoc: FlatPatternDocument;
   selection: SelectionTarget;
+  inspectorOpen: boolean;
   contextMenu: ContextMenuState | null;
   onCloseContextMenu: () => void;
   onSelectTarget: (target: SelectionTarget) => void;
+  onOpenInspector: (target: NonNullable<SelectionTarget>) => void;
+  onCloseInspector: () => void;
   onFocusPiece: (partCode: string) => void;
   onUpdateEndConnection: (end: 'c1' | 'c2', patch: Partial<EndConnectionConfig>) => void;
   onApplyEndToBoth: (sourceEnd: 'c1' | 'c2') => void;
@@ -81,36 +98,46 @@ export interface SelectionContextUIProps {
     patch: { seamType?: SeamType; weldOverlapWidth?: number; inverted?: boolean }
   ) => void;
   onResetCornerOverrides: () => void;
+  onSetEdgeMode: (edgeId: FoldEdgeId, nextMode: EdgeJoinMode) => void;
+  onSwapEdgeMerge: (mergeEdgeId: FoldEdgeId, splitEdgeId: FoldEdgeId) => void;
   onPatchConfig: (patch: Partial<DuctConfig>) => void;
 }
 
 export function SelectionContextUI({
   config,
   workshopSettings,
+  flatPatternDoc,
   selection,
+  inspectorOpen,
   contextMenu,
   onCloseContextMenu,
   onSelectTarget,
+  onOpenInspector,
+  onCloseInspector,
   onFocusPiece,
   onUpdateEndConnection,
   onApplyEndToBoth,
   onUpdateCornerSeam,
   onResetCornerOverrides,
+  onSetEdgeMode,
+  onSwapEdgeMerge,
   onPatchConfig,
 }: SelectionContextUIProps) {
-  // Close ContextMenu & Floating Inspector cleanly on Esc key
+  // Close ContextMenu -> Floating Inspector -> Selection cleanly on Esc key
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (contextMenu) {
         onCloseContextMenu();
+      } else if (inspectorOpen) {
+        onCloseInspector();
       } else if (selection) {
         onSelectTarget(null);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [contextMenu, selection, onCloseContextMenu, onSelectTarget]);
+  }, [contextMenu, inspectorOpen, selection, onCloseContextMenu, onCloseInspector, onSelectTarget]);
 
   // Dismiss ContextMenu on any outside pointerdown
   useEffect(() => {
@@ -124,8 +151,9 @@ export function SelectionContextUI({
     return () => window.removeEventListener('pointerdown', onDown, true);
   }, [contextMenu, onCloseContextMenu]);
 
+  const foldGraph = resolveFoldGraph(config);
   const activeSeams = resolveActiveSeams(config);
-  const blankPieces = calculateBlankAnalysis(config, workshopSettings);
+  const blankPieces = calculateBlankAnalysis(config, workshopSettings, flatPatternDoc);
 
   const selectEndType = (endKey: 'c1' | 'c2', type: EndConnectionType) => {
     const cur = config[endKey];
@@ -201,7 +229,7 @@ export function SelectionContextUI({
                     id="ctx-open-piece-inspector"
                     type="button"
                     onClick={() => {
-                      onSelectTarget({ kind: 'piece', partCode: code });
+                      onOpenInspector({ kind: 'piece', partCode: code });
                       onCloseContextMenu();
                     }}
                     className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] font-medium text-slate-200 transition-colors hover:bg-[#1c283b] hover:text-white"
@@ -265,7 +293,7 @@ export function SelectionContextUI({
                   <button
                     type="button"
                     onClick={() => {
-                      onSelectTarget({ kind: 'end', endKey: 'c1' });
+                      onOpenInspector({ kind: 'end', endKey: 'c1' });
                       onCloseContextMenu();
                     }}
                     className="rounded-md border border-[#233248] bg-[#131d2c] px-2 py-1 text-left text-[10.5px] text-slate-200 hover:border-amber-400/50 hover:text-amber-200"
@@ -278,7 +306,7 @@ export function SelectionContextUI({
                   <button
                     type="button"
                     onClick={() => {
-                      onSelectTarget({ kind: 'end', endKey: 'c2' });
+                      onOpenInspector({ kind: 'end', endKey: 'c2' });
                       onCloseContextMenu();
                     }}
                     className="rounded-md border border-[#233248] bg-[#131d2c] px-2 py-1 text-left text-[10.5px] text-slate-200 hover:border-amber-400/50 hover:text-amber-200"
@@ -381,7 +409,7 @@ export function SelectionContextUI({
                   <button
                     type="button"
                     onClick={() => {
-                      onSelectTarget({ kind: 'end', endKey });
+                      onOpenInspector({ kind: 'end', endKey });
                       onCloseContextMenu();
                     }}
                     className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] font-medium text-sky-200 hover:bg-sky-500/15"
@@ -405,6 +433,18 @@ export function SelectionContextUI({
                   <span className="font-mono text-[10px] text-slate-400">{cornerId}</span>
                 </div>
                 <div className="space-y-2 p-2.5">
+                  <button
+                    id="ctx-seam-merge-bend"
+                    type="button"
+                    onClick={() => {
+                      onSetEdgeMode(cornerId, 'bend');
+                      onCloseContextMenu();
+                    }}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/45 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/25"
+                  >
+                    <GitBranch className="h-3.5 w-3.5" />
+                    <span>Gộp liền mảnh (Chấn 90°) tại {cornerId}</span>
+                  </button>
                   <div className="grid grid-cols-3 gap-1">
                     {(
                       [
@@ -463,14 +503,180 @@ export function SelectionContextUI({
                     </div>
                   )}
                 </div>
+                <div className="p-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenInspector({ kind: 'seam', cornerId });
+                      onCloseContextMenu();
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] font-medium text-sky-200 hover:bg-sky-500/15"
+                  >
+                    <Sliders className="h-3.5 w-3.5" />
+                    <span>Mở thẻ chỉnh nhanh mí {cornerId}...</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {contextMenu.target.kind === 'edge' && (() => {
+            const edgeId = contextMenu.target.edgeId;
+            const edge = foldGraph.edges[edgeId];
+            if (!edge) return null;
+            const isBend = edge.mode === 'bend';
+            const mergeCheck = isBend ? { allowed: true } : validateSetEdgeToBend(config, edgeId);
+            const suggestedId = mergeCheck.suggestedSplitEdgeId;
+            return (
+              <div className="divide-y divide-[#1e2b3e]">
+                <div className="flex items-center justify-between bg-[#141f30] px-3 py-2">
+                  <span className="truncate font-semibold text-sky-200">{edge.label}</span>
+                  <span
+                    className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9.5px] font-bold ${
+                      isBend
+                        ? 'bg-emerald-500/25 text-emerald-200'
+                        : 'bg-amber-500/20 text-amber-200'
+                    }`}
+                  >
+                    {isBend ? 'Chấn 90°' : 'Mí ghép'}
+                  </span>
+                </div>
+
+                <div className="space-y-2 p-2.5">
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      id="ctx-edge-bend"
+                      type="button"
+                      onClick={() => {
+                        onSetEdgeMode(edgeId, 'bend');
+                        onCloseContextMenu();
+                      }}
+                      className={`flex items-center justify-center gap-1 rounded-lg border py-1.5 text-[10.5px] font-semibold transition-colors ${
+                        isBend
+                          ? 'border-emerald-400/70 bg-emerald-500/25 text-emerald-100'
+                          : 'border-[#26354a] bg-[#141f2f] text-slate-300 hover:border-emerald-400/50 hover:text-emerald-200'
+                      }`}
+                    >
+                      <GitBranch className="h-3.5 w-3.5" />
+                      <span>Liền mảnh</span>
+                    </button>
+                    <button
+                      id="ctx-edge-seam"
+                      type="button"
+                      onClick={() => {
+                        onSetEdgeMode(edgeId, 'seam');
+                        onCloseContextMenu();
+                      }}
+                      className={`flex items-center justify-center gap-1 rounded-lg border py-1.5 text-[10.5px] font-semibold transition-colors ${
+                        !isBend
+                          ? 'border-amber-400/70 bg-amber-500/20 text-amber-100'
+                          : 'border-[#26354a] bg-[#141f2f] text-slate-300 hover:border-amber-400/50 hover:text-amber-200'
+                      }`}
+                    >
+                      <Scissors className="h-3.5 w-3.5" />
+                      <span>Tách mảnh</span>
+                    </button>
+                  </div>
+
+                  {!isBend && !mergeCheck.allowed && suggestedId && (
+                    <div className="space-y-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-[10px] text-amber-200">
+                      <div className="flex items-start gap-1">
+                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-400" />
+                        <span>{mergeCheck.reason}</span>
+                      </div>
+                      <button
+                        id="ctx-edge-swap-merge"
+                        type="button"
+                        onClick={() => {
+                          onSwapEdgeMerge(edgeId, suggestedId);
+                          onCloseContextMenu();
+                        }}
+                        className="w-full rounded bg-amber-500/25 px-2 py-1 text-[10px] font-semibold text-amber-100 hover:bg-amber-500/35"
+                      >
+                        Tách {FOLD_EDGE_DEFS[suggestedId].shortLabel} &amp; gộp {edge.shortLabel}
+                      </button>
+                    </div>
+                  )}
+
+                  {!isBend && isBodyEdge(edgeId) && (
+                    <div className="grid grid-cols-3 gap-1">
+                      {(
+                        [
+                          { tp: 'pittsburgh', lb: 'Mí gò' },
+                          { tp: 'weld_overlap', lb: 'Hàn chập' },
+                          { tp: 'weld_butt', lb: 'Đấu đầu' },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.tp}
+                          type="button"
+                          onClick={() => onUpdateCornerSeam(edgeId, { seamType: opt.tp })}
+                          className={`rounded-md py-1 text-[10px] font-semibold ${
+                            edge.seamType === opt.tp
+                              ? 'bg-sky-500/25 text-sky-100 ring-1 ring-sky-400/60'
+                              : 'bg-[#152030] text-slate-300 hover:bg-[#1e2d44]'
+                          }`}
+                        >
+                          {opt.lb}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {!isBend && edge.endKey && edge.wall && (
+                    <div className="grid grid-cols-3 gap-1">
+                      {(
+                        [
+                          { tp: 'pittsburgh', lb: 'Mí gò' },
+                          { tp: 'weld_overlap', lb: 'Hàn chập' },
+                          { tp: 'weld_butt', lb: 'Đấu đầu' },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.tp}
+                          type="button"
+                          onClick={() =>
+                            onUpdateEndConnection(edge.endKey!, {
+                              endCapEdgeSeams: {
+                                ...config[edge.endKey!].endCapEdgeSeams,
+                                [edge.wall!]: opt.tp,
+                              },
+                            })
+                          }
+                          className={`rounded-md py-1 text-[10px] font-semibold ${
+                            edge.seamType === opt.tp
+                              ? 'bg-sky-500/25 text-sky-100 ring-1 ring-sky-400/60'
+                              : 'bg-[#152030] text-slate-300 hover:bg-[#1e2d44]'
+                          }`}
+                        >
+                          {opt.lb}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenInspector({ kind: 'edge', edgeId });
+                      onCloseContextMenu();
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] font-medium text-sky-200 hover:bg-sky-500/15"
+                  >
+                    <Sliders className="h-3.5 w-3.5" />
+                    <span>Mở thẻ chỉnh nhanh cạnh {edge.shortLabel}...</span>
+                  </button>
+                </div>
               </div>
             );
           })()}
         </div>
       )}
 
-      {/* 2. Compact Floating Inspector Card (appears cleanly in viewport top-right on left-click) */}
-      {selection && (
+      {/* 2. Compact Floating Inspector Card (appears ONLY on double-click / Context Menu / sidebar C1-C2 card) */}
+      {selection && inspectorOpen && (
         <div
           id="floating-inspector"
           className="fixed top-14 right-3 z-40 flex max-h-[calc(100vh-5.5rem)] w-[312px] flex-col overflow-hidden rounded-xl border border-[#2d405c] bg-[#0f1622]/96 text-xs text-slate-100 shadow-2xl backdrop-blur-md"
@@ -510,11 +716,21 @@ export function SelectionContextUI({
                   </span>
                 </>
               )}
+              {selection.kind === 'edge' && (
+                <>
+                  <span className="rounded bg-sky-500/25 px-1.5 py-0.5 font-mono text-[11px] font-bold text-sky-200">
+                    {FOLD_EDGE_DEFS[selection.edgeId].shortLabel}
+                  </span>
+                  <span className="truncate font-semibold text-slate-100">
+                    {FOLD_EDGE_DEFS[selection.edgeId].label}
+                  </span>
+                </>
+              )}
             </div>
             <button
               id="btn-close-inspector"
               type="button"
-              onClick={() => onSelectTarget(null)}
+              onClick={onCloseInspector}
               aria-label="Đóng bảng tùy chỉnh nhanh"
               title="Đóng (Esc)"
               className="rounded p-1 text-slate-400 transition-colors hover:bg-[#223047] hover:text-white"
@@ -1256,6 +1472,16 @@ export function SelectionContextUI({
               }
               return (
                 <>
+                  <button
+                    id="btn-inspector-seam-merge-bend"
+                    type="button"
+                    onClick={() => onSetEdgeMode(seam.cornerId, 'bend')}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/45 bg-emerald-500/15 px-2.5 py-1.5 font-semibold text-emerald-200 hover:bg-emerald-500/25"
+                  >
+                    <GitBranch className="h-3.5 w-3.5" />
+                    <span>Gộp liền mảnh (Chấn 90°) tại {seam.cornerId}</span>
+                  </button>
+
                   <div className="rounded-lg border border-[#223045] bg-[#0b111b] p-2.5 text-[10.5px] text-slate-300">
                     <div className="flex items-center justify-between">
                       <span>
@@ -1357,6 +1583,169 @@ export function SelectionContextUI({
                       </button>
                     )}
                   </div>
+                </>
+              );
+            })()}
+
+            {/* FACE-EDGE GRAPH INSPECTOR */}
+            {selection.kind === 'edge' && (() => {
+              const edgeId = selection.edgeId;
+              const edge = foldGraph.edges[edgeId];
+              if (!edge) {
+                return (
+                  <p className="text-slate-400">
+                    Cạnh này không còn hiện diện trong cấu hình hiện tại.
+                  </p>
+                );
+              }
+              const isBend = edge.mode === 'bend';
+              const mergeCheck = isBend ? { allowed: true } : validateSetEdgeToBend(config, edgeId);
+              const suggestedId = mergeCheck.suggestedSplitEdgeId;
+
+              return (
+                <>
+                  <div className="rounded-lg border border-[#223045] bg-[#0b111b] px-2.5 py-2 text-[10.5px]">
+                    <div className="flex items-center justify-between text-slate-300">
+                      <span>Hai mặt tiếp giáp:</span>
+                      <span className="font-semibold text-white">
+                        {FACE_LABELS[edge.faces[0]]} ↔ {FACE_LABELS[edge.faces[1]]}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Primary Merge (Chấn 90°) vs Split (Mí ghép) toggle */}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      id="btn-inspector-edge-bend"
+                      type="button"
+                      onClick={() => onSetEdgeMode(edgeId, 'bend')}
+                      className={`flex flex-col items-center gap-0.5 rounded-lg border px-2 py-2 transition-colors ${
+                        isBend
+                          ? 'border-emerald-400/75 bg-emerald-500/22 text-emerald-100'
+                          : 'border-[#253349] bg-[#131d2c] text-slate-300 hover:border-emerald-400/50 hover:text-emerald-200'
+                      }`}
+                    >
+                      <GitBranch className="h-4 w-4" />
+                      <span className="font-semibold">Liền mảnh</span>
+                      <span className="text-[9.5px] text-slate-400">Chấn 90° liền tấm</span>
+                    </button>
+                    <button
+                      id="btn-inspector-edge-seam"
+                      type="button"
+                      onClick={() => onSetEdgeMode(edgeId, 'seam')}
+                      className={`flex flex-col items-center gap-0.5 rounded-lg border px-2 py-2 transition-colors ${
+                        !isBend
+                          ? 'border-amber-400/75 bg-amber-500/20 text-amber-100'
+                          : 'border-[#253349] bg-[#131d2c] text-slate-300 hover:border-amber-400/50 hover:text-amber-200'
+                      }`}
+                    >
+                      <Scissors className="h-4 w-4" />
+                      <span className="font-semibold">Tách mảnh</span>
+                      <span className="text-[9.5px] text-slate-400">Mí gò / Hàn ghép</span>
+                    </button>
+                  </div>
+
+                  {/* Cycle-Guard Alert + 1-Click Auto-Swap */}
+                  {!isBend && !mergeCheck.allowed && (
+                    <div className="space-y-2 rounded-lg border border-amber-500/45 bg-amber-500/10 p-2.5 text-[10.5px] text-amber-200">
+                      <div className="flex items-start gap-1.5">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+                        <span>{mergeCheck.reason}</span>
+                      </div>
+                      {suggestedId && (
+                        <button
+                          id="btn-inspector-edge-swap"
+                          type="button"
+                          onClick={() => onSwapEdgeMerge(edgeId, suggestedId)}
+                          className="w-full rounded-md bg-amber-500/25 px-2.5 py-1.5 font-semibold text-amber-100 ring-1 ring-amber-400/45 hover:bg-amber-500/35"
+                        >
+                          Tách {FOLD_EDGE_DEFS[suggestedId].shortLabel} &amp; gộp {edge.shortLabel}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* When split ('seam'), show seam type options */}
+                  {!isBend && isBodyEdge(edgeId) && (
+                    <div className="space-y-2 border-t border-[#1e2b3e] pt-2">
+                      <div className="text-[10px] font-semibold tracking-wider text-slate-400 uppercase">
+                        Kiểu mí ghép góc {edgeId}
+                      </div>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {(
+                          [
+                            { tp: 'pittsburgh', lb: 'Mí gò', sub: '+31 / +7' },
+                            { tp: 'weld_overlap', lb: 'Hàn chập', sub: `${edge.weldOverlapWidth} mm` },
+                            { tp: 'weld_butt', lb: 'Đấu đầu', sub: '0 – 0' },
+                          ] as const
+                        ).map((opt) => (
+                          <button
+                            key={opt.tp}
+                            type="button"
+                            onClick={() => onUpdateCornerSeam(edgeId, { seamType: opt.tp })}
+                            className={`rounded-lg border px-1.5 py-1.5 text-center transition-colors ${
+                              edge.seamType === opt.tp
+                                ? 'border-sky-400/65 bg-sky-500/20 text-sky-100'
+                                : 'border-[#233248] bg-[#131d2c] text-slate-300 hover:border-sky-500/50'
+                            }`}
+                          >
+                            <div className="font-semibold">{opt.lb}</div>
+                            <div className="font-mono text-[9.5px] text-slate-400">{opt.sub}</div>
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onUpdateCornerSeam(edgeId, {
+                            inverted: !config.seamOverrides[edgeId]?.inverted,
+                          })
+                        }
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#2a3b55] bg-[#162234] px-2.5 py-1.5 font-medium text-sky-200 hover:border-sky-400/50"
+                      >
+                        <ArrowLeftRight className="h-3.5 w-3.5 text-sky-400" />
+                        <span>Đảo mí kép ↔ mí đơn</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {!isBend && edge.endKey && edge.wall && (
+                    <div className="space-y-2 border-t border-[#1e2b3e] pt-2">
+                      <div className="text-[10px] font-semibold tracking-wider text-slate-400 uppercase">
+                        Kiểu mí ghép cạnh {edge.shortLabel}
+                      </div>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {(
+                          [
+                            { tp: 'pittsburgh', lb: 'Mí gò', sub: '+31 / +7' },
+                            { tp: 'weld_overlap', lb: 'Hàn chập', sub: `${edge.weldOverlapWidth} mm` },
+                            { tp: 'weld_butt', lb: 'Đấu đầu', sub: '0 – 0' },
+                          ] as const
+                        ).map((opt) => (
+                          <button
+                            key={opt.tp}
+                            type="button"
+                            onClick={() =>
+                              onUpdateEndConnection(edge.endKey!, {
+                                endCapEdgeSeams: {
+                                  ...config[edge.endKey!].endCapEdgeSeams,
+                                  [edge.wall!]: opt.tp,
+                                },
+                              })
+                            }
+                            className={`rounded-lg border px-1.5 py-1.5 text-center transition-colors ${
+                              edge.seamType === opt.tp
+                                ? 'border-sky-400/65 bg-sky-500/20 text-sky-100'
+                                : 'border-[#233248] bg-[#131d2c] text-slate-300 hover:border-sky-500/50'
+                            }`}
+                          >
+                            <div className="font-semibold">{opt.lb}</div>
+                            <div className="font-mono text-[9.5px] text-slate-400">{opt.sub}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               );
             })()}

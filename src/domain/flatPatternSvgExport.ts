@@ -198,15 +198,27 @@ export function buildExportableSvgString(
              <text x="${p.widthMm * 0.5}" y="-190" text-anchor="middle" fill="${p.limitCheck.severity === 'danger' ? '#dc2626' : '#b45309'}" font-family="system-ui, sans-serif" font-size="24" font-weight="700">⚠ ${escapeXml(p.limitCheck.statusText)}</text>`
           : '';
 
+      const overlapSvg = p.hasOverlap2D
+        ? `<rect x="-22" y="-22" width="${p.widthMm + 44}" height="${p.heightMm + 44}" fill="none" stroke="#ea580c" stroke-width="3.5" stroke-dasharray="18 8" />
+           <text x="${p.widthMm * 0.5}" y="${p.limitCheck.severity !== 'ok' ? -228 : -190}" text-anchor="middle" fill="#ea580c" font-family="system-ui, sans-serif" font-size="24" font-weight="700">⚠ ${escapeXml(p.overlapWarning ?? 'Trùng vùng phôi 2D — hãy đổi cạnh ghép')}</text>
+           ${(p.overlapRects ?? [])
+             .map(
+               (ov) =>
+                 `<rect x="${ov.x}" y="${ov.y}" width="${ov.w}" height="${ov.h}" fill="rgba(234, 88, 12, 0.25)" stroke="#ea580c" stroke-width="2.5" />`
+             )
+             .join('\n')}`
+        : '';
+
       return `
         <g transform="translate(${p.originX + pad}, ${p.originY + titleBarH + pad})">
+          ${overlapSvg}
           ${warnBox}
           <path d="${cutD}" fill="#f8fafc" stroke="none" />
           ${zones}
           ${folds}
           ${bends}
           ${ribs}
-          <path d="${cutD}" fill="none" stroke="#0f172a" stroke-width="2.6" stroke-linejoin="miter" />
+          <path d="${cutD}" fill="none" stroke="${p.hasOverlap2D ? '#ea580c' : '#0f172a'}" stroke-width="2.6" stroke-linejoin="miter" />
           ${sheetGuide}
           ${wallLbls}
           <g transform="translate(${p.centerLabelPos.x}, ${p.centerLabelPos.y})">

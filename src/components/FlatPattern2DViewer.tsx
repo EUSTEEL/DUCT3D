@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -8,7 +8,10 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { buildExportableDxfString } from '../domain/flatPatternDxfExport';
+import {
+  buildExportableDxfString,
+  formatDxfTimestampFileName,
+} from '../domain/dxfExporter';
 import {
   buildExportableSvgString,
   escapeXml,
@@ -16,7 +19,7 @@ import {
   getZoneFillStyle,
   pointsToPath,
 } from '../domain/flatPatternSvgExport';
-import type { CornerId, SelectionTarget } from '../types/duct';
+import type { CornerId, FoldEdgeId, SelectionTarget } from '../types/duct';
 import type { FlatPatternDocument, FlatPatternPiece } from '../types/flatPattern2d';
 
 interface FlatPattern2DViewerProps {
@@ -24,8 +27,10 @@ interface FlatPattern2DViewerProps {
   technicalMode: boolean;
   selection: SelectionTarget;
   onSelectTarget: (target: SelectionTarget) => void;
+  onOpenInspector: (target: NonNullable<SelectionTarget>) => void;
   onOpenContextMenu: (x: number, y: number, target: NonNullable<SelectionTarget>) => void;
   focusPartRequest?: { partCode: string; seq: number } | null;
+  topLeftOverlay?: ReactNode;
   compact?: boolean;
 }
 
@@ -36,8 +41,28 @@ interface ViewBox {
   h: number;
 }
 
+const VALID_EDGE_IDS = new Set<string>([
+  'TL',
+  'TR',
+  'BR',
+  'BL',
+  'C1_top',
+  'C1_bottom',
+  'C1_left',
+  'C1_right',
+  'C2_top',
+  'C2_bottom',
+  'C2_left',
+  'C2_right',
+]);
+
 function resolveHitTarget(el: Element | null): NonNullable<SelectionTarget> | null {
   if (!el) return null;
+  const hitEdge = el.closest?.('[data-edge-id]');
+  if (hitEdge) {
+    const eid = hitEdge.getAttribute('data-edge-id');
+    if (eid && VALID_EDGE_IDS.has(eid)) return { kind: 'edge', edgeId: eid as FoldEdgeId };
+  }
   const hitEnd = el.closest?.('[data-end-key]');
   if (hitEnd) {
     const k = hitEnd.getAttribute('data-end-key');
@@ -56,14 +81,6 @@ function resolveHitTarget(el: Element | null): NonNullable<SelectionTarget> | nu
     if (code) return { kind: 'piece', partCode: code };
   }
   return null;
-}
-
-function isSameTarget(a: SelectionTarget, b: SelectionTarget): boolean {
-  if (!a || !b || a.kind !== b.kind) return false;
-  if (a.kind === 'piece' && b.kind === 'piece') return a.partCode === b.partCode;
-  if (a.kind === 'end' && b.kind === 'end') return a.endKey === b.endKey;
-  if (a.kind === 'seam' && b.kind === 'seam') return a.cornerId === b.cornerId;
-  return false;
 }
 
 function renderPieceDimensions(piece: FlatPatternPiece) {
@@ -218,8 +235,10 @@ export function FlatPattern2DViewer({
   technicalMode,
   selection,
   onSelectTarget,
+  onOpenInspector,
   onOpenContextMenu,
   focusPartRequest = null,
+  topLeftOverlay = null,
   compact = false,
 }: FlatPattern2DViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -360,10 +379,12 @@ export function FlatPattern2DViewer({
     return () => el.removeEventListener('wheel', onWheel);
   }, [applyZoom]);
 
+  const lastDownTargetRef = useRef<NonNullable<SelectionTarget> | null>(null);
+
   const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button !== 0 && e.button !== 1) return;
     const downTarget = resolveHitTarget(e.target as Element | null);
-    e.currentTarget.setPointerCapture(e.pointerId);
+    lastDownTargetRef.current = downTarget;
     dragRef.current = {
       active: true,
       didDrag: false,
@@ -379,8 +400,13 @@ export function FlatPattern2DViewer({
     if (!dr.active || !containerRef.current) return;
     const dxPx = e.clientX - dr.startX;
     const dyPx = e.clientY - dr.startY;
-    if (Math.hypot(dxPx, dyPx) > 4) {
+    if (!dr.didDrag && Math.hypot(dxPx, dyPx) > 4) {
       dr.didDrag = true;
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore if pointer already released
+      }
     }
     if (!dr.didDrag) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -406,10 +432,19 @@ export function FlatPattern2DViewer({
     dr.downTarget = null;
     if (wasDrag) return;
 
+    // Single-click ONLY highlights target (never toggles off on same target so dblclick works cleanly)
     if (target) {
-      onSelectTarget(isSameTarget(selection, target) ? null : target);
+      onSelectTarget(target);
     } else {
       onSelectTarget(null);
+    }
+  };
+
+  const handleSvgDoubleClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    const target = resolveHitTarget(e.target as Element | null) ?? lastDownTargetRef.current;
+    if (target) {
+      e.preventDefault();
+      onOpenInspector(target);
     }
   };
 
@@ -427,7 +462,7 @@ export function FlatPattern2DViewer({
     const url = URL.createObjectURL(blob);
     const a = window.document.createElement('a');
     a.href = url;
-    a.download = `${doc.exportFileName}.dxf`;
+    a.download = formatDxfTimestampFileName();
     window.document.body.appendChild(a);
     a.click();
     window.document.body.removeChild(a);
@@ -488,7 +523,9 @@ export function FlatPattern2DViewer({
 
   const anyDanger = doc.pieces.some((p) => p.limitCheck.severity === 'danger');
   const anyWarn = doc.pieces.some((p) => p.limitCheck.severity === 'warn');
+  const anyOverlap2D = doc.pieces.some((p) => p.hasOverlap2D);
   const selectedPartCode = selection?.kind === 'piece' ? selection.partCode : null;
+  const selectedEdgeId = selection?.kind === 'edge' ? selection.edgeId : null;
 
   return (
     <div
@@ -580,6 +617,11 @@ export function FlatPattern2DViewer({
         ref={containerRef}
         className="relative min-h-0 flex-1 overflow-hidden bg-[radial-gradient(ellipse_at_50%_40%,#151f2e_0%,#0c121b_72%,#090e15_100%)]"
       >
+        {topLeftOverlay && (
+          <div className="absolute top-2.5 left-3 z-20 flex items-center gap-2">
+            {topLeftOverlay}
+          </div>
+        )}
         <svg
           id="flat-pattern-svg"
           className="h-full w-full cursor-grab active:cursor-grabbing"
@@ -587,6 +629,7 @@ export function FlatPattern2DViewer({
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
+          onDoubleClick={handleSvgDoubleClick}
           onContextMenu={handleSvgContextMenu}
         >
           <defs>
@@ -608,6 +651,25 @@ export function FlatPattern2DViewer({
                 stroke="#263852"
                 strokeWidth="1.1"
                 vectorEffect="non-scaling-stroke"
+              />
+            </pattern>
+            {/* Orange diagonal hatch for 2D self-overlapping unfolded regions */}
+            <pattern
+              id="overlapHatch"
+              width="28"
+              height="28"
+              patternUnits="userSpaceOnUse"
+              patternTransform="rotate(45)"
+            >
+              <rect width="28" height="28" fill="rgba(249, 115, 22, 0.22)" />
+              <line
+                x1="0"
+                y1="0"
+                x2="0"
+                y2="28"
+                stroke="#f97316"
+                strokeWidth="4"
+                strokeOpacity="0.85"
               />
             </pattern>
           </defs>
@@ -657,11 +719,13 @@ export function FlatPattern2DViewer({
             const c1Selected = selection?.kind === 'end' && selection.endKey === 'c1';
             const leftSeamSelected =
               !piece.isEndCap &&
+              !piece.isMergedTree &&
               piece.leftCornerId &&
               selection?.kind === 'seam' &&
               selection.cornerId === piece.leftCornerId;
             const rightSeamSelected =
               !piece.isEndCap &&
+              !piece.isMergedTree &&
               piece.rightCornerId &&
               selection?.kind === 'seam' &&
               selection.cornerId === piece.rightCornerId;
@@ -675,9 +739,39 @@ export function FlatPattern2DViewer({
                 data-part-code={piece.partCode}
                 data-limit-severity={lc.severity}
                 data-limit-orientation={lc.orientation}
+                data-overlap-2d={piece.hasOverlap2D ? 'true' : 'false'}
                 transform={`translate(${piece.originX}, ${piece.originY})`}
                 className="cursor-pointer"
               >
+                {/* Orange Self-Overlap 2D Warning Frame (Free-Merge Net Check) */}
+                {piece.hasOverlap2D && (
+                  <g className="pointer-events-none">
+                    <rect
+                      x={-22}
+                      y={-22}
+                      width={piece.widthMm + 44}
+                      height={piece.heightMm + 44}
+                      rx={10}
+                      fill="rgba(249, 115, 22, 0.08)"
+                      stroke="#f97316"
+                      strokeWidth={2.6}
+                      strokeDasharray="12 6"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <text
+                      x={piece.widthMm * 0.5}
+                      y={lc.severity !== 'ok' ? -242 : -206}
+                      textAnchor="middle"
+                      fill="#fb923c"
+                      fontFamily="system-ui, sans-serif"
+                      fontSize={23}
+                      fontWeight={700}
+                    >
+                      ⚠ {piece.overlapWarning ?? 'Cảnh báo: Có vùng phôi 2D chồng lấn — hãy đổi cạnh ghép'}
+                    </text>
+                  </g>
+                )}
+
                 {/* Sheet-width / Roll-former warning frame ONLY when actually exceeding limits */}
                 {lc.severity !== 'ok' && (
                   <g className="pointer-events-none">
@@ -712,7 +806,7 @@ export function FlatPattern2DViewer({
                 )}
 
                 {/* Subtle Green Status Badge when rotated longitudinal fits 100% cleanly */}
-                {lc.severity === 'ok' && lc.orientation === 'doc_6000' && (
+                {lc.severity === 'ok' && lc.orientation === 'doc_6000' && !piece.hasOverlap2D && (
                   <text
                     x={piece.widthMm * 0.5}
                     y={-206}
@@ -745,8 +839,25 @@ export function FlatPattern2DViewer({
                     />
                   ))}
 
-                {/* Interactive C2 (top), C1 (bottom), and Left/Right Seam edge hit zones */}
-                {!piece.isEndCap && (
+                {/* Hatched Orange Rectangles marking exact 2D overlapping face regions */}
+                {piece.hasOverlap2D &&
+                  piece.overlapRects?.map((ov, oi) => (
+                    <rect
+                      key={`ov-${oi}`}
+                      x={ov.x}
+                      y={ov.y}
+                      width={ov.w}
+                      height={ov.h}
+                      fill="url(#overlapHatch)"
+                      stroke="#f97316"
+                      strokeWidth={2.2}
+                      vectorEffect="non-scaling-stroke"
+                      className="pointer-events-none"
+                    />
+                  ))}
+
+                {/* Interactive C2 (top), C1 (bottom), and Left/Right Seam edge hit zones for linear body pieces */}
+                {!piece.isEndCap && !piece.isMergedTree && (
                   <>
                     {/* C2 Top End Zone */}
                     <rect
@@ -836,34 +947,71 @@ export function FlatPattern2DViewer({
                   />
                 ))}
 
-                {/* 90° Press-brake bend lines (Đường chấn) */}
-                {piece.bendLines.map((l, bi) => (
-                  <g key={`b-${bi}`} className="pointer-events-none">
-                    <line
-                      x1={l.x1}
-                      y1={l.y1}
-                      x2={l.x2}
-                      y2={l.y2}
-                      stroke="#22c55e"
-                      strokeWidth={1.5}
-                      strokeDasharray="10 6"
-                      vectorEffect="non-scaling-stroke"
-                    />
-                    <text
-                      x={l.x1 - 8}
-                      y={(l.y1 + l.y2) * 0.5}
-                      textAnchor="middle"
-                      transform={`rotate(-90 ${l.x1 - 8} ${(l.y1 + l.y2) * 0.5})`}
-                      fill="#4ade80"
-                      fillOpacity={0.78}
-                      fontFamily="ui-monospace, monospace"
-                      fontSize={16}
-                      fontWeight={600}
-                    >
-                      CHẤN 90°
-                    </text>
-                  </g>
-                ))}
+                {/* 90° Press-brake bend lines (Đường chấn — supports both vertical & horizontal bends) */}
+                {piece.bendLines.map((l, bi) => {
+                  const isHoriz = Math.abs(l.y2 - l.y1) < Math.abs(l.x2 - l.x1);
+                  const mx = (l.x1 + l.x2) * 0.5;
+                  const my = (l.y1 + l.y2) * 0.5;
+                  return (
+                    <g key={`b-${bi}`} className="pointer-events-none">
+                      <line
+                        x1={l.x1}
+                        y1={l.y1}
+                        x2={l.x2}
+                        y2={l.y2}
+                        stroke="#22c55e"
+                        strokeWidth={1.5}
+                        strokeDasharray="10 6"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      <text
+                        x={isHoriz ? mx : l.x1 - 8}
+                        y={isHoriz ? l.y1 - 8 : my}
+                        textAnchor="middle"
+                        transform={isHoriz ? undefined : `rotate(-90 ${l.x1 - 8} ${my})`}
+                        fill="#4ade80"
+                        fillOpacity={0.78}
+                        fontFamily="ui-monospace, monospace"
+                        fontSize={16}
+                        fontWeight={600}
+                      >
+                        CHẤN 90°
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {/* Interactive Shared Edges on 2D (click / double-click / right-click bend or merged cap edges) */}
+                {piece.interactiveEdges?.map((ie, iei) => {
+                  const isEdgeSel = selectedEdgeId === ie.edgeId;
+                  return (
+                    <g key={`ie-${ie.edgeId}-${iei}`}>
+                      {isEdgeSel && (
+                        <line
+                          x1={ie.x1}
+                          y1={ie.y1}
+                          x2={ie.x2}
+                          y2={ie.y2}
+                          stroke="#38bdf8"
+                          strokeWidth={3.2}
+                          vectorEffect="non-scaling-stroke"
+                          className="pointer-events-none"
+                        />
+                      )}
+                      <line
+                        data-edge-id={ie.edgeId}
+                        x1={ie.x1}
+                        y1={ie.y1}
+                        x2={ie.x2}
+                        y2={ie.y2}
+                        stroke="transparent"
+                        strokeWidth={18}
+                        vectorEffect="non-scaling-stroke"
+                        className="cursor-pointer"
+                      />
+                    </g>
+                  );
+                })}
 
                 {/* Straight Stiffener Ribs (ALWAYS parallel to C1/C2, configurable pitch from Workshop Settings) */}
                 {piece.ribLines.map((l, ri) => (
@@ -885,8 +1033,8 @@ export function FlatPattern2DViewer({
                 <path
                   d={cutD}
                   fill="none"
-                  stroke={isSelected ? '#38bdf8' : '#e2e8f0'}
-                  strokeWidth={isSelected ? 2.6 : 1.75}
+                  stroke={piece.hasOverlap2D ? '#fb923c' : isSelected ? '#38bdf8' : '#e2e8f0'}
+                  strokeWidth={isSelected || piece.hasOverlap2D ? 2.6 : 1.75}
                   strokeLinejoin="miter"
                   vectorEffect="non-scaling-stroke"
                   className="pointer-events-none"
@@ -971,7 +1119,7 @@ export function FlatPattern2DViewer({
                   </g>
                 )}
 
-                {/* Subtle Wall Face Watermarks (TRÊN, TRÁI, DƯỚI, PHẢI) */}
+                {/* Subtle Wall Face Watermarks (TRÊN, TRÁI, DƯỚI, PHẢI, BỊT C1...) */}
                 {piece.wallLabels.map((wl, wi) => (
                   <text
                     key={`wl-${wi}`}
@@ -1086,7 +1234,7 @@ export function FlatPattern2DViewer({
 
         {/* Subtle Pan/Zoom Helper Pill */}
         <div className="pointer-events-none absolute top-2.5 right-3 rounded-md border border-[#223045] bg-[#0c121b]/82 px-2 py-0.5 text-[10.5px] text-slate-400 backdrop-blur-xs">
-          Cuộn: Zoom • Kéo: Di chuyển • Click / Chuột phải: Tùy chỉnh mảnh, bích &amp; mí
+          Cuộn: Zoom • Kéo: Di chuyển • Click: Chọn • Click đúp: Chỉnh nhanh • Chuột phải: Menu
         </div>
       </div>
 
@@ -1112,6 +1260,15 @@ export function FlatPattern2DViewer({
         </div>
 
         <div className="flex items-center gap-2 font-mono text-[11px]">
+          {anyOverlap2D && (
+            <span
+              id="badge-2d-overlap-warn"
+              className="inline-flex items-center gap-1 rounded bg-orange-500/20 px-1.5 py-0.5 font-sans font-semibold text-orange-200 ring-1 ring-orange-500/50"
+            >
+              <AlertTriangle className="h-3 w-3 shrink-0 text-orange-400" />
+              <span>Trùng vùng 2D</span>
+            </span>
+          )}
           <span
             id="badge-2d-limit-status"
             className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 ${

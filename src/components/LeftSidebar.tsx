@@ -1,12 +1,15 @@
 import { FileSpreadsheet, FileText, PanelLeftClose, SlidersHorizontal } from 'lucide-react';
 import type {
   DuctConfig,
+  EdgeJoinMode,
+  FoldEdgeId,
   SelectionTarget,
   SheetMaterialType,
   SidebarTab,
   SplitMode,
   WorkshopSettings,
 } from '../types/duct';
+import type { FlatPatternDocument } from '../types/flatPattern2d';
 import { BlankAnalysisTab } from './BlankAnalysisTab';
 import { LsxTab } from './LsxTab';
 import { ParamsTab } from './ParamsTab';
@@ -17,14 +20,19 @@ interface LeftSidebarProps {
   onCollapse: () => void;
   config: DuctConfig;
   workshopSettings: WorkshopSettings;
+  flatPatternDoc: FlatPatternDocument;
   selection: SelectionTarget;
   onSelectTarget: (target: SelectionTarget) => void;
+  onOpenInspector: (target: NonNullable<SelectionTarget>) => void;
   onChange: (patch: Partial<DuctConfig>) => void;
   onDimensionChange: (dim: 'W' | 'H' | 'L', value: number) => void;
   onSheetMaterialChange: (material: SheetMaterialType) => void;
   onCopyC1ToC2: () => void;
   onSelectSplitMode: (mode: SplitMode) => void;
   onToggleAutoSplit: () => void;
+  onToggleFreeMergeMode: () => void;
+  onSetEdgeMode: (edgeId: FoldEdgeId, nextMode: EdgeJoinMode) => void;
+  onApplyFreeMergePreset: (preset: 'merge_c1_top' | 'cross_5_face' | 'reset_standard') => void;
   onSwapSeams: () => void;
 }
 
@@ -34,14 +42,19 @@ export function LeftSidebar({
   onCollapse,
   config,
   workshopSettings,
+  flatPatternDoc,
   selection,
   onSelectTarget,
+  onOpenInspector,
   onChange,
   onDimensionChange,
   onSheetMaterialChange,
   onCopyC1ToC2,
   onSelectSplitMode,
   onToggleAutoSplit,
+  onToggleFreeMergeMode,
+  onSetEdgeMode,
+  onApplyFreeMergePreset,
   onSwapSeams,
 }: LeftSidebarProps) {
   const tabs: { id: SidebarTab; label: string; icon: typeof SlidersHorizontal }[] = [
@@ -122,12 +135,16 @@ export function LeftSidebar({
             workshopSettings={workshopSettings}
             selection={selection}
             onSelectTarget={onSelectTarget}
+            onOpenInspector={onOpenInspector}
             onChange={onChange}
             onDimensionChange={onDimensionChange}
             onSheetMaterialChange={onSheetMaterialChange}
             onCopyC1ToC2={onCopyC1ToC2}
             onSelectSplitMode={onSelectSplitMode}
             onToggleAutoSplit={onToggleAutoSplit}
+            onToggleFreeMergeMode={onToggleFreeMergeMode}
+            onSetEdgeMode={onSetEdgeMode}
+            onApplyFreeMergePreset={onApplyFreeMergePreset}
             onSwapSeams={onSwapSeams}
           />
         )}
@@ -138,9 +155,13 @@ export function LeftSidebar({
           <BlankAnalysisTab
             config={config}
             workshopSettings={workshopSettings}
+            flatPatternDoc={flatPatternDoc}
             selectedPartCode={selectedPartCode}
             onSelectPart={(code) =>
               onSelectTarget(code ? { kind: 'piece', partCode: code } : null)
+            }
+            onOpenPartInspector={(code) =>
+              onOpenInspector({ kind: 'piece', partCode: code })
             }
           />
         )}

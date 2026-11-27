@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { AccessoryKind, BuiltFaceLabel } from '../domain/endConnectionBuilder';
@@ -8,11 +8,12 @@ import {
   disposeUnfoldableDuctRig,
   evaluateAccessoryRetractFactor,
   evaluatePieceRuntimePose,
+  type EdgeHitStrip3D,
   type HingeSegmentNode,
   type UnfoldableDuctRig,
   type WallRigNode,
-} from '../domain/unfoldRigBuilder';
-import type { DuctConfig, SelectionTarget } from '../types/duct';
+} from '../domain/geometry3D';
+import type { DuctConfig, FoldEdgeId, SelectionTarget } from '../types/duct';
 import { createFaceLabelTexture } from './faceLabelTexture';
 import { createDuctMaterialSet, type DuctMaterialSet } from './galvanizedMaterial';
 
@@ -26,7 +27,7 @@ function applyRigTransforms(
   explodeRatio: number,
   unfoldRatio: number,
   pieceRootMap: Map<string, THREE.Group>,
-  wallHingeMap: Map<string, { group: THREE.Group; side: -1 | 1; pieceId: string }>,
+  wallHingeMap: Map<string, { group: THREE.Group; node: WallRigNode; pieceId: string }>,
   detailHingeMap: Map<string, { group: THREE.Group; node: HingeSegmentNode; pieceId: string }>,
   accessoryMap: Map<string, THREE.Group>,
   weldGroup: THREE.Group | null
@@ -38,14 +39,26 @@ function applyRigTransforms(
     const rootGrp = pieceRootMap.get(piece.id);
     if (rootGrp) {
       rootGrp.position.set(pose.positionM[0], pose.positionM[1], pose.positionM[2]);
-      rootGrp.rotation.set(0, 0, pose.rotZ);
+      rootGrp.quaternion.set(
+        pose.quaternion[0],
+        pose.quaternion[1],
+        pose.quaternion[2],
+        pose.quaternion[3]
+      );
     }
   }
 
-  wallHingeMap.forEach(({ group, side, pieceId }) => {
+  wallHingeMap.forEach(({ group, node, pieceId }) => {
     const pose = poseByPiece.get(pieceId);
     if (!pose) return;
-    group.rotation.z = side * (Math.PI / 2) * pose.bodyFoldFactor;
+    const angle = node.hingeFoldedAngleRad * pose.bodyFoldFactor;
+    if (node.hingeAxis === 'x') {
+      group.rotation.x = angle;
+      group.rotation.z = 0;
+    } else {
+      group.rotation.z = angle;
+      group.rotation.x = 0;
+    }
   });
 
   detailHingeMap.forEach(({ group, node, pieceId }) => {
@@ -55,8 +68,10 @@ function applyRigTransforms(
     const angle = node.foldedAngleRad * pose.detailFoldFactor * lockMult;
     if (node.axis === 'x') {
       group.rotation.x = angle;
+      group.rotation.z = 0;
     } else {
       group.rotation.z = angle;
+      group.rotation.x = 0;
     }
   });
 
@@ -110,6 +125,7 @@ interface DuctAssemblyProps {
   ribPitchMm: number;
   selection: SelectionTarget;
   onSelectTarget: (target: SelectionTarget) => void;
+  onOpenInspector: (target: NonNullable<SelectionTarget>) => void;
   onContextMenuTarget: (e: ThreeEvent<PointerEvent>, target: NonNullable<SelectionTarget>) => void;
 }
 
@@ -118,6 +134,7 @@ interface InnerFaceDecalProps {
   selected: boolean;
   opacity?: number;
   onClickTarget: (e: ThreeEvent<MouseEvent>, target: NonNullable<SelectionTarget>) => void;
+  onDoubleClickTarget: (e: ThreeEvent<MouseEvent>, target: NonNullable<SelectionTarget>) => void;
   onContextTarget: (e: ThreeEvent<PointerEvent>, target: NonNullable<SelectionTarget>) => void;
 }
 
@@ -126,6 +143,7 @@ function InnerFaceDecal({
   selected,
   opacity = 1,
   onClickTarget,
+  onDoubleClickTarget,
   onContextTarget,
 }: InnerFaceDecalProps) {
   const texture = useMemo(
@@ -146,6 +164,7 @@ function InnerFaceDecal({
       position={label.position}
       rotation={label.rotation}
       onClick={(e) => onClickTarget(e, target)}
+      onDoubleClick={(e) => onDoubleClickTarget(e, target)}
       onPointerUp={(e) => onContextTarget(e, target)}
       renderOrder={2}
     >
@@ -173,6 +192,7 @@ interface HingeBranchProps {
   seamSelectedEdgeMaterial: THREE.LineBasicMaterial;
   onRegisterHinge: (id: string, group: THREE.Group | null, node: HingeSegmentNode) => void;
   onClickTarget: (e: ThreeEvent<MouseEvent>, target: NonNullable<SelectionTarget>) => void;
+  onDoubleClickTarget: (e: ThreeEvent<MouseEvent>, target: NonNullable<SelectionTarget>) => void;
   onContextTarget: (e: ThreeEvent<PointerEvent>, target: NonNullable<SelectionTarget>) => void;
 }
 
@@ -186,19 +206,23 @@ function HingeBranch({
   seamSelectedEdgeMaterial,
   onRegisterHinge,
   onClickTarget,
+  onDoubleClickTarget,
   onContextTarget,
 }: HingeBranchProps) {
   const target: NonNullable<SelectionTarget> = node.endKey
     ? { kind: 'end', endKey: node.endKey }
     : node.cornerId
       ? { kind: 'seam', cornerId: node.cornerId }
-      : { kind: 'piece', partCode };
+      : node.edgeId
+        ? { kind: 'edge', edgeId: node.edgeId }
+        : { kind: 'piece', partCode };
 
   const isEndSelected = Boolean(
     node.endKey && selection?.kind === 'end' && selection.endKey === node.endKey
   );
   const isSeamSelected = Boolean(
-    node.cornerId && selection?.kind === 'seam' && selection.cornerId === node.cornerId
+    (node.cornerId && selection?.kind === 'seam' && selection.cornerId === node.cornerId) ||
+      (node.edgeId && selection?.kind === 'edge' && selection.edgeId === node.edgeId)
   );
   const edgeMat = isEndSelected
     ? endSelectedEdgeMaterial
@@ -218,6 +242,7 @@ function HingeBranch({
         castShadow
         receiveShadow
         onClick={(e) => onClickTarget(e, target)}
+        onDoubleClick={(e) => onDoubleClickTarget(e, target)}
         onPointerUp={(e) => onContextTarget(e, target)}
       />
       <lineSegments geometry={node.edgesGeometry} material={edgeMat} />
@@ -233,6 +258,7 @@ function HingeBranch({
           seamSelectedEdgeMaterial={seamSelectedEdgeMaterial}
           onRegisterHinge={onRegisterHinge}
           onClickTarget={onClickTarget}
+          onDoubleClickTarget={onDoubleClickTarget}
           onContextTarget={onContextTarget}
         />
       ))}
@@ -250,9 +276,10 @@ interface WallBranchProps {
   edgeMaterial: THREE.LineBasicMaterial;
   endSelectedEdgeMaterial: THREE.LineBasicMaterial;
   seamSelectedEdgeMaterial: THREE.LineBasicMaterial;
-  onRegisterWallHinge: (id: string, group: THREE.Group | null, side: -1 | 1) => void;
+  onRegisterWallHinge: (id: string, group: THREE.Group | null, node: WallRigNode) => void;
   onRegisterDetailHinge: (id: string, group: THREE.Group | null, node: HingeSegmentNode) => void;
   onClickTarget: (e: ThreeEvent<MouseEvent>, target: NonNullable<SelectionTarget>) => void;
+  onDoubleClickTarget: (e: ThreeEvent<MouseEvent>, target: NonNullable<SelectionTarget>) => void;
   onContextTarget: (e: ThreeEvent<PointerEvent>, target: NonNullable<SelectionTarget>) => void;
 }
 
@@ -269,25 +296,20 @@ function WallBranch({
   onRegisterWallHinge,
   onRegisterDetailHinge,
   onClickTarget,
+  onDoubleClickTarget,
   onContextTarget,
 }: WallBranchProps) {
   const pieceTarget: NonNullable<SelectionTarget> = { kind: 'piece', partCode };
 
-  const wallContent = (
-    <group
-      name={`wall-${node.id}`}
-      position={
-        node.hingeSideFromParent === 0
-          ? [0, 0, 0]
-          : [node.hingeSideFromParent * (node.spanMm / 2) * MM_TO_M, 0, 0]
-      }
-    >
+  const wallBody = (
+    <>
       <mesh
         geometry={node.geometry}
         material={activeMaterials}
         castShadow
         receiveShadow
         onClick={(e) => onClickTarget(e, pieceTarget)}
+        onDoubleClick={(e) => onDoubleClickTarget(e, pieceTarget)}
         onPointerUp={(e) => onContextTarget(e, pieceTarget)}
       />
       <lineSegments geometry={node.edgesGeometry} material={edgeMaterial} />
@@ -297,11 +319,12 @@ function WallBranch({
           label={node.faceLabel}
           selected={isSelected}
           onClickTarget={onClickTarget}
+          onDoubleClickTarget={onDoubleClickTarget}
           onContextTarget={onContextTarget}
         />
       )}
 
-      {/* Integral seams & end flanges hinged directly onto this wall */}
+      {/* Integral seams & end flanges hinged directly onto this face */}
       {node.flangeHinges.map((hinge) => (
         <HingeBranch
           key={hinge.id}
@@ -314,11 +337,12 @@ function WallBranch({
           seamSelectedEdgeMaterial={seamSelectedEdgeMaterial}
           onRegisterHinge={onRegisterDetailHinge}
           onClickTarget={onClickTarget}
+          onDoubleClickTarget={onDoubleClickTarget}
           onContextTarget={onContextTarget}
         />
       ))}
 
-      {/* Adjacent walls hinged around this wall's 90° bend edges */}
+      {/* Adjacent faces (body walls OR merged end caps) hinged around 90° bend edges */}
       {node.childWalls.map((child) => (
         <WallBranch
           key={child.id}
@@ -334,24 +358,95 @@ function WallBranch({
           onRegisterWallHinge={onRegisterWallHinge}
           onRegisterDetailHinge={onRegisterDetailHinge}
           onClickTarget={onClickTarget}
+          onDoubleClickTarget={onDoubleClickTarget}
           onContextTarget={onContextTarget}
         />
       ))}
-    </group>
+    </>
   );
 
-  if (node.hingeSideFromParent === 0) {
-    return wallContent;
+  if (node.isRoot) {
+    return <group name={`wall-${node.id}`}>{wallBody}</group>;
   }
 
-  const side = node.hingeSideFromParent;
   return (
     <group
       name={`hinge-${node.id}`}
-      position={[side * (node.parentSpanMm / 2) * MM_TO_M, 0, 0]}
-      ref={(el) => onRegisterWallHinge(node.id, el, side)}
+      position={node.hingePivotInParentM}
+      ref={(el) => onRegisterWallHinge(node.id, el, node)}
     >
-      {wallContent}
+      <group rotation={[0, node.flatRotYRad, 0]}>
+        <group name={`wall-${node.id}`} position={node.childOffsetInLocalM}>
+          {wallBody}
+        </group>
+      </group>
+    </group>
+  );
+}
+
+interface EdgeHitStripMeshProps {
+  strip: EdgeHitStrip3D;
+  freeMergeMode: boolean;
+  selected: boolean;
+  hovered: boolean;
+  onHover: (edgeId: FoldEdgeId | null) => void;
+  onClickTarget: (e: ThreeEvent<MouseEvent>, target: NonNullable<SelectionTarget>) => void;
+  onDoubleClickTarget: (e: ThreeEvent<MouseEvent>, target: NonNullable<SelectionTarget>) => void;
+  onContextTarget: (e: ThreeEvent<PointerEvent>, target: NonNullable<SelectionTarget>) => void;
+}
+
+function EdgeHitStripMesh({
+  strip,
+  freeMergeMode,
+  selected,
+  hovered,
+  onHover,
+  onClickTarget,
+  onDoubleClickTarget,
+  onContextTarget,
+}: EdgeHitStripMeshProps) {
+  const target: NonNullable<SelectionTarget> = { kind: 'edge', edgeId: strip.edgeId };
+  const visible = freeMergeMode || selected || hovered;
+  const color = selected
+    ? '#38bdf8'
+    : strip.mode === 'bend'
+      ? hovered
+        ? '#4ade80'
+        : '#22c55e'
+      : hovered
+        ? '#fbbf24'
+        : '#f59e0b';
+  const visualRadius = selected ? 0.0048 : hovered ? 0.004 : 0.003;
+  const hitRadius = freeMergeMode ? 0.011 : 0.0065;
+
+  return (
+    <group position={strip.centerM} rotation={strip.rotation} name={`edge-strip-${strip.edgeId}`}>
+      {visible && (
+        <mesh renderOrder={4}>
+          <cylinderGeometry args={[visualRadius, visualRadius, strip.lengthM, 8]} />
+          <meshBasicMaterial
+            color={color}
+            transparent
+            opacity={selected ? 0.98 : hovered ? 0.9 : 0.78}
+          />
+        </mesh>
+      )}
+      <mesh
+        onPointerOver={(e) => {
+          e.stopPropagation();
+          onHover(strip.edgeId);
+        }}
+        onPointerOut={(e) => {
+          e.stopPropagation();
+          onHover(null);
+        }}
+        onClick={(e) => onClickTarget(e, target)}
+        onDoubleClick={(e) => onDoubleClickTarget(e, target)}
+        onPointerUp={(e) => onContextTarget(e, target)}
+      >
+        <cylinderGeometry args={[hitRadius, hitRadius, strip.lengthM, 6]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
     </group>
   );
 }
@@ -359,18 +454,21 @@ function WallBranch({
 /**
  * Renders the parametric 3D straight duct assembly with hierarchical zero-rebuild
  * 60fps pivot groups supporting:
- * - Smooth `Mở phôi 3D` (0% -> 100%) unfolding of walls, seams & integral end flanges
+ * - Smooth `Mở phôi 3D` (0% -> 100%) unfolding of arbitrary Face–Edge spanning trees (4/5/6 faces)
  * - Smooth detached accessory axial retraction & fade during 0% -> 30% unfold
  * - Smooth `Tách mảnh` (0% -> 100%) and `Chưa gò mí <-> Đã gò mí` lock animation
- * - Interactive left-click & right-click picking for pieces, C1/C2 ends, and longitudinal seams
+ * - Single-click highlight, double-click Floating Inspector, and right-click Context Menu
+ *   for pieces, C1/C2 ends, longitudinal seams, and shared fold edges
  */
 export function DuctAssembly({
   config,
   ribPitchMm,
   selection,
   onSelectTarget,
+  onOpenInspector,
   onContextMenuTarget,
 }: DuctAssemblyProps) {
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<FoldEdgeId | null>(null);
   const materialSet = useMemo(() => createDuctMaterialSet(), []);
 
   useEffect(() => {
@@ -385,6 +483,8 @@ export function DuctAssembly({
     L,
     thickness,
     splitMode,
+    freeMergeMode,
+    customEdgeStates,
     globalSeamType,
     weldOverlapWidth,
     swapSeamRoles,
@@ -406,6 +506,8 @@ export function DuctAssembly({
       thickness,
       autoSplit: false,
       splitMode,
+      freeMergeMode,
+      customEdgeStates,
       globalSeamType,
       weldOverlapWidth,
       swapSeamRoles,
@@ -426,6 +528,8 @@ export function DuctAssembly({
     L,
     thickness,
     splitMode,
+    freeMergeMode,
+    customEdgeStates,
     globalSeamType,
     weldOverlapWidth,
     swapSeamRoles,
@@ -450,7 +554,7 @@ export function DuctAssembly({
       ? materialSet.inoxMaterials
       : materialSet.galvanizedMaterials;
 
-  // Dedicated cloned materials for End Cap accessory so 0->30% opacity fade NEVER affects body pieces
+  // Dedicated cloned materials for detached End Cap accessory so 0->30% opacity fade NEVER affects body pieces
   const endCapMaterials = useMemo(
     () => activeMaterials.map((m) => m.clone()),
     [activeMaterials]
@@ -555,9 +659,9 @@ export function DuctAssembly({
 
   // Live imperative refs for 60fps zero-allocation transforms
   const pieceRootRefs = useRef<Map<string, THREE.Group>>(new Map());
-  const wallHingeRefs = useRef<Map<string, { group: THREE.Group; side: -1 | 1; pieceId: string }>>(
-    new Map()
-  );
+  const wallHingeRefs = useRef<
+    Map<string, { group: THREE.Group; node: WallRigNode; pieceId: string }>
+  >(new Map());
   const detailHingeRefs = useRef<
     Map<string, { group: THREE.Group; node: HingeSegmentNode; pieceId: string }>
   >(new Map());
@@ -652,23 +756,38 @@ export function DuctAssembly({
     }
   });
 
+  // Single-click ONLY selects & highlights (does NOT open Floating Inspector, does NOT toggle off so dblclick works smoothly)
   const handleClickTarget = (
     e: ThreeEvent<MouseEvent>,
     target: NonNullable<SelectionTarget>
   ) => {
     if (e.delta > 4) return;
     e.stopPropagation();
-    const same =
-      selection !== null &&
-      selection.kind === target.kind &&
-      ((target.kind === 'piece' && selection.kind === 'piece' && selection.partCode === target.partCode) ||
-        (target.kind === 'end' && selection.kind === 'end' && selection.endKey === target.endKey) ||
-        (target.kind === 'seam' && selection.kind === 'seam' && selection.cornerId === target.cornerId));
-    onSelectTarget(same ? null : target);
+    onSelectTarget(target);
+  };
+
+  // Double-click opens Floating Inspector for the clicked piece, end, seam, or edge
+  const handleDoubleClickTarget = (
+    e: ThreeEvent<MouseEvent>,
+    target: NonNullable<SelectionTarget>
+  ) => {
+    if (e.delta > 4) return;
+    e.stopPropagation();
+    onOpenInspector(target);
   };
 
   const selectedPartCode = selection?.kind === 'piece' ? selection.partCode : null;
+  const selectedEdgeId = selection?.kind === 'edge' ? selection.edgeId : null;
   const detFadeOpacity = 1 - evaluateAccessoryRetractFactor(config.unfoldProgress / 100) * 0.72;
+  const showEdgeHitStrips = config.explode < 2 && config.unfoldProgress < 2;
+  const visibleEdgeStrips = useMemo(() => {
+    if (!showEdgeHitStrips) return [];
+    // In freeMergeMode show ALL active shared edges (body + end caps) interactively.
+    // In standard mode, only attach subtle edge hit strips on 'bend' edges so normal seam/end hits stay crisp.
+    return freeMergeMode
+      ? rig.edgeHitStrips
+      : rig.edgeHitStrips.filter((s) => s.mode === 'bend' || s.edgeId === selectedEdgeId);
+  }, [showEdgeHitStrips, freeMergeMode, rig.edgeHitStrips, selectedEdgeId]);
 
   return (
     <group name="duct-assembly-root">
@@ -696,8 +815,8 @@ export function DuctAssembly({
               edgeMaterial={pieceEdgeMat}
               endSelectedEdgeMaterial={endSelectedEdgeMaterial}
               seamSelectedEdgeMaterial={seamSelectedEdgeMaterial}
-              onRegisterWallHinge={(id, grp, side) => {
-                if (grp) wallHingeRefs.current.set(id, { group: grp, side, pieceId: piece.id });
+              onRegisterWallHinge={(id, grp, node) => {
+                if (grp) wallHingeRefs.current.set(id, { group: grp, node, pieceId: piece.id });
                 else wallHingeRefs.current.delete(id);
               }}
               onRegisterDetailHinge={(id, grp, node) => {
@@ -705,11 +824,27 @@ export function DuctAssembly({
                 else detailHingeRefs.current.delete(id);
               }}
               onClickTarget={handleClickTarget}
+              onDoubleClickTarget={handleDoubleClickTarget}
               onContextTarget={onContextMenuTarget}
             />
           </group>
         );
       })}
+
+      {/* Interactive Shared Edge Hit Strips (Face–Edge Graph: click / double-click / right-click in 3D) */}
+      {visibleEdgeStrips.map((strip) => (
+        <EdgeHitStripMesh
+          key={strip.edgeId}
+          strip={strip}
+          freeMergeMode={freeMergeMode}
+          selected={selectedEdgeId === strip.edgeId}
+          hovered={hoveredEdgeId === strip.edgeId}
+          onHover={setHoveredEdgeId}
+          onClickTarget={handleClickTarget}
+          onDoubleClickTarget={handleDoubleClickTarget}
+          onContextTarget={onContextMenuTarget}
+        />
+      ))}
 
       {/* Longitudinal Weld Beads (hidden automatically when exploding or unfolding) */}
       <group ref={weldGroupRef} name="weld-beads-group">
@@ -726,6 +861,7 @@ export function DuctAssembly({
               material={weldBeadMat}
               castShadow
               onClick={(e) => handleClickTarget(e, seamTarget)}
+              onDoubleClick={(e) => handleDoubleClickTarget(e, seamTarget)}
               onPointerUp={(e) => onContextMenuTarget(e, seamTarget)}
             />
           );
@@ -764,6 +900,7 @@ export function DuctAssembly({
               castShadow={acc.kind !== 'lcct_mesh' && config.unfoldProgress < 5}
               receiveShadow
               onClick={accTarget ? (e) => handleClickTarget(e, accTarget) : undefined}
+              onDoubleClick={accTarget ? (e) => handleDoubleClickTarget(e, accTarget) : undefined}
               onPointerUp={accTarget ? (e) => onContextMenuTarget(e, accTarget) : undefined}
             />
             {acc.edgesGeometry && (
@@ -778,6 +915,7 @@ export function DuctAssembly({
                   selected={isPieceSelected}
                   opacity={detFadeOpacity}
                   onClickTarget={handleClickTarget}
+                  onDoubleClickTarget={handleDoubleClickTarget}
                   onContextTarget={onContextMenuTarget}
                 />
               ))}

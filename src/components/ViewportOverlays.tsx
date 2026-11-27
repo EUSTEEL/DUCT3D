@@ -1,13 +1,16 @@
-import { Box, Crosshair, Eye, PanelLeftOpen, RotateCcw, Square, X } from 'lucide-react';
+import { Box, Crosshair, Eye, PanelLeftOpen, RotateCcw, Sliders, Square, X } from 'lucide-react';
 import { CORNER_LABELS, SHEET_MATERIAL_LABELS, SPLIT_MODE_LABELS } from '../domain/ductRules';
 import { END_CONNECTION_SHORT_LABELS } from '../domain/endConnectionRules';
+import { FOLD_EDGE_DEFS } from '../domain/foldGraph';
 import type { CameraPreset, DuctConfig, SelectionTarget } from '../types/duct';
 
 interface ViewportOverlaysProps {
   config: DuctConfig;
   sidebarOpen: boolean;
   selection: SelectionTarget;
+  inspectorOpen: boolean;
   onClearSelection: () => void;
+  onOpenInspector: (target: NonNullable<SelectionTarget>) => void;
   onExpandSidebar: () => void;
   onCameraPreset: (preset: CameraPreset) => void;
   compact?: boolean;
@@ -17,7 +20,9 @@ export function ViewportOverlays({
   config,
   sidebarOpen,
   selection,
+  inspectorOpen,
   onClearSelection,
+  onOpenInspector,
   onExpandSidebar,
   onCameraPreset,
   compact = false,
@@ -34,7 +39,9 @@ export function ViewportOverlays({
       ? { prefix: 'Đang chọn mảnh:', code: selection.partCode }
       : selection.kind === 'end'
         ? { prefix: 'Đang chọn đầu:', code: selection.endKey.toUpperCase() }
-        : { prefix: 'Đang chọn mí:', code: CORNER_LABELS[selection.cornerId] }
+        : selection.kind === 'seam'
+          ? { prefix: 'Đang chọn mí:', code: CORNER_LABELS[selection.cornerId] }
+          : { prefix: 'Đang chọn cạnh:', code: FOLD_EDGE_DEFS[selection.edgeId].shortLabel }
     : null;
 
   return (
@@ -54,18 +61,30 @@ export function ViewportOverlays({
           </button>
         )}
 
-        {pillText && (
+        {selection && pillText && (
           <div
             id="pill-selected-part"
             className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/55 bg-sky-500/18 px-2.5 py-1 text-xs font-medium text-sky-100 shadow-lg backdrop-blur-md"
           >
             <span>{pillText.prefix}</span>
             <strong className="font-mono font-bold text-white">{pillText.code}</strong>
+            {!inspectorOpen && (
+              <button
+                id="btn-pill-open-inspector"
+                type="button"
+                onClick={() => onOpenInspector(selection)}
+                title="Mở thẻ tùy chỉnh nhanh (hoặc Click đúp lên đối tượng)"
+                className="ml-0.5 inline-flex items-center gap-1 rounded bg-sky-400/20 px-1.5 py-0.5 text-[10.5px] font-semibold text-sky-100 transition-colors hover:bg-sky-400/35 hover:text-white"
+              >
+                <Sliders className="h-3 w-3" />
+                <span>Chỉnh</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={onClearSelection}
               aria-label="Bỏ chọn"
-              className="ml-0.5 rounded p-0.5 text-sky-200 hover:bg-sky-400/25 hover:text-white"
+              className="rounded p-0.5 text-sky-200 hover:bg-sky-400/25 hover:text-white"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -113,7 +132,9 @@ export function ViewportOverlays({
               <span className="text-slate-600">|</span>
               <span className="font-sans text-amber-200/90">{endsSummary}</span>
               <span className="text-slate-600">|</span>
-              <span className="font-sans text-slate-300">{SPLIT_MODE_LABELS[config.splitMode]}</span>
+              <span className={`font-sans ${config.freeMergeMode ? 'font-semibold text-emerald-300' : 'text-slate-300'}`}>
+                {config.freeMergeMode ? 'Ghép mảnh tự do' : SPLIT_MODE_LABELS[config.splitMode]}
+              </span>
               <span className="text-slate-600">|</span>
               <span
                 className={`font-sans font-medium ${

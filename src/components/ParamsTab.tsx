@@ -6,8 +6,10 @@ import {
   ChevronRight,
   Copy,
   Flame,
+  GitBranch,
   Info,
   MousePointerClick,
+  RotateCcw,
   Sliders,
   Sparkles,
 } from 'lucide-react';
@@ -20,9 +22,18 @@ import {
   SHEET_MATERIAL_LABELS,
 } from '../domain/ductRules';
 import { END_CONNECTION_SHORT_LABELS, getEndAllowanceMm } from '../domain/endConnectionRules';
+import {
+  BODY_EDGE_IDS,
+  C1_CAP_EDGE_IDS,
+  C2_CAP_EDGE_IDS,
+  FACE_SHORT_LABELS,
+  resolveFoldGraph,
+} from '../domain/foldGraph';
 import { getActiveSheetDimensions } from '../domain/workshopSettings';
 import type {
   DuctConfig,
+  EdgeJoinMode,
+  FoldEdgeId,
   SeamType,
   SelectionTarget,
   SheetMaterialType,
@@ -37,12 +48,16 @@ interface ParamsTabProps {
   workshopSettings: WorkshopSettings;
   selection: SelectionTarget;
   onSelectTarget: (target: SelectionTarget) => void;
+  onOpenInspector: (target: NonNullable<SelectionTarget>) => void;
   onChange: (patch: Partial<DuctConfig>) => void;
   onDimensionChange: (dim: 'W' | 'H' | 'L', value: number) => void;
   onSheetMaterialChange: (material: SheetMaterialType) => void;
   onCopyC1ToC2: () => void;
   onSelectSplitMode: (mode: SplitMode) => void;
   onToggleAutoSplit: () => void;
+  onToggleFreeMergeMode: () => void;
+  onSetEdgeMode: (edgeId: FoldEdgeId, nextMode: EdgeJoinMode) => void;
+  onApplyFreeMergePreset: (preset: 'merge_c1_top' | 'cross_5_face' | 'reset_standard') => void;
   onSwapSeams: () => void;
 }
 
@@ -188,24 +203,25 @@ function DimInput({ id, label, code, value, min, max, step, onChange }: DimInput
  * - Collapsible Quick Presets accordion (DEFAULT CLOSED)
  * - Global Dimensions W, H, L + Step selector
  * - Material & Thickness (synced live with WorkshopSettings)
- * - Compact clickable C1/C2 summary cards (clicking opens Floating Inspector on viewport)
- * - Global Split Mode & Auto-Split toggle
+ * - Compact clickable C1/C2 summary cards (opens Floating Inspector on viewport)
+ * - Global Split Mode, Auto-Split toggle, and `Ghép mảnh tự do` Face–Edge Graph toggle
  * - Compact default seam type + Ribs toggle (live pitch from WorkshopSettings)
- *
- * Piece-level, corner-seam-level, and detailed C1/C2 controls live directly in the
- * right-click Context Menu and Floating Inspector on 3D & 2D viewports!
  */
 export function ParamsTab({
   config,
   workshopSettings,
   selection,
   onSelectTarget,
+  onOpenInspector,
   onChange,
   onDimensionChange,
   onSheetMaterialChange,
   onCopyC1ToC2,
   onSelectSplitMode,
   onToggleAutoSplit,
+  onToggleFreeMergeMode,
+  onSetEdgeMode,
+  onApplyFreeMergePreset,
   onSwapSeams,
 }: ParamsTabProps) {
   const [presetsOpen, setPresetsOpen] = useState(false);
@@ -223,6 +239,7 @@ export function ParamsTab({
     workshopSettings
   );
   const activeSeams = resolveActiveSeams(config);
+  const foldGraph = resolveFoldGraph(config);
   const ribLayout = computeRibLayout(config.L, config.stiffenerRibs, workshopSettings.ribPitchMm);
 
   const hasAnyOverride = activeSeams.some((s) => s.isOverridden);
@@ -248,6 +265,34 @@ export function ParamsTab({
 
   const c1Allow = getEndAllowanceMm(config.c1);
   const c2Allow = getEndAllowanceMm(config.c2);
+
+  const renderEdgeChip = (edgeId: FoldEdgeId) => {
+    const edge = foldGraph.edges[edgeId];
+    if (!edge) return null;
+    const isBend = edge.mode === 'bend';
+    const isSel = selection?.kind === 'edge' && selection.edgeId === edgeId;
+    return (
+      <button
+        key={edgeId}
+        id={`edge-chip-${edgeId}`}
+        type="button"
+        onClick={() => onSetEdgeMode(edgeId, isBend ? 'seam' : 'bend')}
+        title={`${edge.label}: ${isBend ? 'Đang Liền mảnh (Chấn 90°) — Click để tách mí' : 'Đang Tách mảnh (Mí ghép) — Click để gộp liền'}`}
+        className={`flex flex-col items-center rounded-md border px-1 py-1 text-center transition-colors ${
+          isSel
+            ? 'border-sky-400 bg-sky-500/25 text-sky-100 ring-1 ring-sky-400/50'
+            : isBend
+              ? 'border-emerald-500/55 bg-emerald-500/18 text-emerald-100 hover:bg-emerald-500/28'
+              : 'border-[#273549] bg-[#141c29] text-slate-300 hover:border-amber-400/50 hover:text-amber-100'
+        }`}
+      >
+        <span className="font-mono text-[10px] font-bold leading-tight">{edge.shortLabel}</span>
+        <span className={`text-[9px] font-medium ${isBend ? 'text-emerald-300' : 'text-amber-300/80'}`}>
+          {isBend ? 'Chấn 90°' : 'Mí ghép'}
+        </span>
+      </button>
+    );
+  };
 
   return (
     <div className="space-y-3.5 pb-5">
@@ -313,6 +358,8 @@ export function ParamsTab({
                       c1: nextC1,
                       c2: nextC2,
                       autoSplit: true,
+                      freeMergeMode: false,
+                      customEdgeStates: {},
                       splitMode: nextRec.recommended,
                       seamOverrides: {},
                     });
@@ -539,9 +586,7 @@ export function ParamsTab({
                 key={item.key}
                 id={`card-end-${item.key}`}
                 type="button"
-                onClick={() =>
-                  onSelectTarget(active ? null : { kind: 'end', endKey: item.key })
-                }
+                onClick={() => onOpenInspector({ kind: 'end', endKey: item.key })}
                 className={`rounded-lg border px-2.5 py-2 text-left transition-colors ${
                   active
                     ? 'border-amber-400/70 bg-amber-500/15 text-amber-100 ring-1 ring-amber-400/40'
@@ -564,30 +609,46 @@ export function ParamsTab({
         </div>
       </section>
 
-      {/* Piece Splitting */}
+      {/* Piece Splitting + Free-Merge Face–Edge Graph Toggle */}
       <section className="space-y-2 border-t border-[#1e2838] pt-3">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-1.5">
           <h2 className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
-            Chia mảnh (Khổ {activeSheet.widthMm})
+            Chia mảnh ({activeSheet.widthMm})
           </h2>
-          <button
-            id="btn-auto-split"
-            type="button"
-            onClick={onToggleAutoSplit}
-            className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors ${
-              config.autoSplit
-                ? 'bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/40'
-                : 'bg-[#1a2230] text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Sparkles className="h-3 w-3" />
-            <span>{config.autoSplit ? 'Tự động: BẬT' : 'Thủ công'}</span>
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              id="btn-free-merge-mode"
+              type="button"
+              onClick={onToggleFreeMergeMode}
+              title="Bật/tắt chế độ tự do chọn cạnh liền mảnh (Chấn 90°) hoặc tách mảnh (Mí ghép) — hỗ trợ gộp đầu bịt 5–6 mặt"
+              className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors ${
+                config.freeMergeMode
+                  ? 'bg-emerald-500/25 text-emerald-200 ring-1 ring-emerald-400/60'
+                  : 'bg-[#1a2230] text-slate-300 hover:bg-[#222f42] hover:text-emerald-200'
+              }`}
+            >
+              <GitBranch className="h-3 w-3" />
+              <span>Ghép tự do</span>
+            </button>
+            <button
+              id="btn-auto-split"
+              type="button"
+              onClick={onToggleAutoSplit}
+              className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors ${
+                config.autoSplit && !config.freeMergeMode
+                  ? 'bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/40'
+                  : 'bg-[#1a2230] text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Sparkles className="h-3 w-3" />
+              <span>{config.autoSplit && !config.freeMergeMode ? 'Tự động' : 'Thủ công'}</span>
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-1.5">
           {splitOptions.map((opt) => {
-            const active = config.splitMode === opt.mode;
+            const active = !config.freeMergeMode && config.splitMode === opt.mode;
             const isRec = rec.recommended === opt.mode;
             return (
               <button
@@ -619,6 +680,114 @@ export function ParamsTab({
             );
           })}
         </div>
+
+        {/* Free-Merge Face–Edge Graph Panel (visible when Ghép tự do is active) */}
+        {config.freeMergeMode && (
+          <div
+            id="free-merge-panel"
+            className="space-y-2 rounded-lg border border-emerald-500/35 bg-[#0d161d] p-2.5 text-[10.5px]"
+          >
+            <div className="flex items-center justify-between gap-1">
+              <span className="font-semibold text-emerald-200">
+                Ghép mảnh tự do ({foldGraph.components.length} mảnh)
+              </span>
+              <button
+                id="btn-preset-reset-free-merge"
+                type="button"
+                onClick={() => onApplyFreeMergePreset('reset_standard')}
+                className="inline-flex items-center gap-1 rounded bg-[#182633] px-1.5 py-0.5 text-[9.5px] font-medium text-slate-300 hover:bg-[#233548] hover:text-white"
+              >
+                <RotateCcw className="h-2.5 w-2.5" />
+                <span>Đặt lại</span>
+              </button>
+            </div>
+
+            {/* Resolved connected components summary */}
+            <div className="flex flex-wrap gap-1">
+              {foldGraph.components.map((comp) => {
+                const isSel = selection?.kind === 'piece' && selection.partCode === comp.partCode;
+                return (
+                  <button
+                    key={comp.id}
+                    type="button"
+                    onClick={() => onSelectTarget({ kind: 'piece', partCode: comp.partCode })}
+                    onDoubleClick={() => onOpenInspector({ kind: 'piece', partCode: comp.partCode })}
+                    className={`rounded border px-1.5 py-0.5 text-[9.5px] transition-colors ${
+                      isSel
+                        ? 'border-sky-400 bg-sky-500/25 text-white'
+                        : 'border-[#25364a] bg-[#131e2a] text-slate-200 hover:border-sky-500/50'
+                    }`}
+                  >
+                    <strong className="font-mono text-sky-300">{comp.partCode}</strong>:{' '}
+                    {comp.faces.map((f) => FACE_SHORT_LABELS[f]).join('+')}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Quick 5/6-face presets when C1 has End Cap */}
+            {config.c1.type === 'end_cap' && (
+              <div className="grid grid-cols-2 gap-1">
+                <button
+                  id="btn-preset-merge-c1-top"
+                  type="button"
+                  onClick={() => onApplyFreeMergePreset('merge_c1_top')}
+                  className="rounded border border-emerald-500/40 bg-emerald-500/12 px-1.5 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/22"
+                >
+                  Gộp Bịt C1 + Trên
+                </button>
+                <button
+                  id="btn-preset-cross-5-face"
+                  type="button"
+                  onClick={() => onApplyFreeMergePreset('cross_5_face')}
+                  className="rounded border border-sky-500/40 bg-sky-500/12 px-1.5 py-1 text-[10px] font-semibold text-sky-200 hover:bg-sky-500/22"
+                >
+                  Chữ thập 5 mặt
+                </button>
+              </div>
+            )}
+
+            {/* Body shared edges (TL / TR / BR / BL) */}
+            <div className="space-y-1">
+              <div className="text-[9.5px] font-semibold tracking-wider text-slate-400 uppercase">
+                Cạnh dọc thân ống (Click đổi Chấn ↔ Mí)
+              </div>
+              <div className="grid grid-cols-4 gap-1">
+                {BODY_EDGE_IDS.map((eid) => renderEdgeChip(eid))}
+              </div>
+            </div>
+
+            {/* C1 End-Cap shared edges */}
+            {config.c1.type === 'end_cap' && (
+              <div className="space-y-1">
+                <div className="text-[9.5px] font-semibold tracking-wider text-amber-300/90 uppercase">
+                  Cạnh tiếp giáp Đầu bịt C1
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  {C1_CAP_EDGE_IDS.map((eid) => renderEdgeChip(eid))}
+                </div>
+              </div>
+            )}
+
+            {/* C2 End-Cap shared edges */}
+            {config.c2.type === 'end_cap' && (
+              <div className="space-y-1">
+                <div className="text-[9.5px] font-semibold tracking-wider text-amber-300/90 uppercase">
+                  Cạnh tiếp giáp Đầu bịt C2
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  {C2_CAP_EDGE_IDS.map((eid) => renderEdgeChip(eid))}
+                </div>
+              </div>
+            )}
+
+            <p className="text-[9.5px] leading-snug text-slate-400">
+              Cạnh màu <span className="font-semibold text-emerald-300">xanh lá</span> = Chấn 90° liền
+              mảnh; <span className="font-semibold text-amber-300">vàng cam</span> = Mí ghép rời. Có thể
+              click/chuột phải trực tiếp lên các cạnh ngay trên 3D &amp; 2D.
+            </p>
+          </div>
+        )}
       </section>
 
       {/* Compact Global Seam Mode */}
@@ -761,7 +930,9 @@ export function ParamsTab({
       <div className="flex items-start gap-1.5 rounded-lg border border-sky-500/20 bg-sky-500/6 px-2.5 py-2 text-[10.5px] leading-snug text-slate-400">
         <MousePointerClick className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-400" />
         <span>
-          Click trái hoặc <strong className="text-slate-200">chuột phải trực tiếp</strong> lên mảnh, đầu bích C1/C2 hoặc cạnh mí trên 3D &amp; 2D để tùy chỉnh nhanh.
+          <strong className="text-slate-200">Click:</strong> Chọn nổi bật •{' '}
+          <strong className="text-slate-200">Click đúp:</strong> Mở thẻ chỉnh nhanh •{' '}
+          <strong className="text-slate-200">Chuột phải:</strong> Menu nhanh trên 3D &amp; 2D.
         </span>
       </div>
     </div>

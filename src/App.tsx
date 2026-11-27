@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { PanelLeftOpen, X } from 'lucide-react';
+import { AlertTriangle, PanelLeftOpen, Sliders, X } from 'lucide-react';
 import { FlatPattern2DViewer } from './components/FlatPattern2DViewer';
 import { LeftSidebar } from './components/LeftSidebar';
 import { SelectionContextUI } from './components/SelectionContextUI';
@@ -12,7 +12,13 @@ import {
   evaluateSplitForConfig,
   normalizeThicknessForMaterial,
 } from './domain/ductRules';
-import { buildStraightDuctFlatPattern } from './domain/flatPatternBuilder';
+import { buildStraightDuctFlatPattern } from './domain/flatPattern2D';
+import {
+  buildFreeMergePresetEdges,
+  FOLD_EDGE_DEFS,
+  getDefaultEdgeStatesForSplitMode,
+  validateSetEdgeToBend,
+} from './domain/foldGraph';
 import {
   DEFAULT_WORKSHOP_SETTINGS,
   loadWorkshopSettings,
@@ -24,7 +30,10 @@ import type {
   ContextMenuState,
   CornerId,
   DuctConfig,
+  EdgeJoinMode,
   EndConnectionConfig,
+  FoldEdgeId,
+  FreeMergeNotice,
   SeamType,
   SelectionTarget,
   SheetMaterialType,
@@ -44,7 +53,9 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
   const [viewportMode, setViewportMode] = useState<ViewportMode>('3d');
   const [selection, setSelection] = useState<SelectionTarget>(null);
+  const [inspectorOpen, setInspectorOpen] = useState<boolean>(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [freeMergeNotice, setFreeMergeNotice] = useState<FreeMergeNotice | null>(null);
   const [focusPartRequest, setFocusPartRequest] = useState<{ partCode: string; seq: number } | null>(
     null
   );
@@ -66,7 +77,7 @@ export function App() {
   const handleWorkshopSettingsChange = useCallback((nextSettings: WorkshopSettings) => {
     setWorkshopSettings(nextSettings);
     setConfig((prev) => {
-      if (!prev.autoSplit) return prev;
+      if (!prev.autoSplit || prev.freeMergeMode) return prev;
       const rec = evaluateSplitForConfig(
         prev.W,
         prev.H,
@@ -88,6 +99,9 @@ export function App() {
   }, [handleWorkshopSettingsChange]);
 
   const handlePatchConfig = useCallback((patch: Partial<DuctConfig>) => {
+    if (patch.freeMergeMode === false) {
+      setFreeMergeNotice(null);
+    }
     setConfig((prev) => ({ ...prev, ...patch }));
   }, []);
 
@@ -95,7 +109,7 @@ export function App() {
     (dim: 'W' | 'H' | 'L', value: number) => {
       setConfig((prev) => {
         const next = { ...prev, [dim]: value };
-        if (next.autoSplit) {
+        if (next.autoSplit && !next.freeMergeMode) {
           const rec = evaluateSplitForConfig(
             next.W,
             next.H,
@@ -125,7 +139,7 @@ export function App() {
           sheetMaterial: material,
           thickness: nextThickness,
         };
-        if (next.autoSplit) {
+        if (next.autoSplit && !next.freeMergeMode) {
           const rec = evaluateSplitForConfig(
             next.W,
             next.H,
@@ -148,6 +162,7 @@ export function App() {
 
   const handleUpdateEndConnection = useCallback(
     (end: 'c1' | 'c2', patch: Partial<EndConnectionConfig>) => {
+      setFreeMergeNotice(null);
       setConfig((prev) => {
         const next: DuctConfig = {
           ...prev,
@@ -156,7 +171,7 @@ export function App() {
             ...patch,
           },
         };
-        if (next.autoSplit) {
+        if (next.autoSplit && !next.freeMergeMode) {
           const rec = evaluateSplitForConfig(
             next.W,
             next.H,
@@ -179,6 +194,7 @@ export function App() {
 
   const handleApplyEndToBoth = useCallback(
     (sourceEnd: 'c1' | 'c2') => {
+      setFreeMergeNotice(null);
       setConfig((prev) => {
         const src = prev[sourceEnd];
         const cloned: EndConnectionConfig = {
@@ -191,7 +207,7 @@ export function App() {
           c1: sourceEnd === 'c1' ? prev.c1 : cloned,
           c2: sourceEnd === 'c2' ? prev.c2 : cloned,
         };
-        if (next.autoSplit) {
+        if (next.autoSplit && !next.freeMergeMode) {
           const rec = evaluateSplitForConfig(
             next.W,
             next.H,
@@ -219,7 +235,9 @@ export function App() {
   const handleSelectSplitMode = useCallback(
     (mode: SplitMode) => {
       setSelection(null);
+      setInspectorOpen(false);
       setContextMenu(null);
+      setFreeMergeNotice(null);
       setConfig((prev) => {
         const rec = evaluateSplitForConfig(
           prev.W,
@@ -234,6 +252,8 @@ export function App() {
           ...prev,
           splitMode: mode,
           autoSplit: mode === rec.recommended,
+          freeMergeMode: false,
+          customEdgeStates: {},
           seamOverrides: {},
         };
       });
@@ -242,8 +262,9 @@ export function App() {
   );
 
   const handleToggleAutoSplit = useCallback(() => {
+    setFreeMergeNotice(null);
     setConfig((prev) => {
-      const nextAuto = !prev.autoSplit;
+      const nextAuto = !(prev.autoSplit && !prev.freeMergeMode);
       if (nextAuto) {
         const rec = evaluateSplitForConfig(
           prev.W,
@@ -257,6 +278,8 @@ export function App() {
         return {
           ...prev,
           autoSplit: true,
+          freeMergeMode: false,
+          customEdgeStates: {},
           splitMode: rec.recommended,
           seamOverrides: {},
         };
@@ -264,6 +287,93 @@ export function App() {
       return { ...prev, autoSplit: false };
     });
   }, [workshopSettings]);
+
+  const handleToggleFreeMergeMode = useCallback(() => {
+    setFreeMergeNotice(null);
+    setConfig((prev) => {
+      if (prev.freeMergeMode) {
+        return { ...prev, freeMergeMode: false };
+      }
+      return {
+        ...prev,
+        freeMergeMode: true,
+        autoSplit: false,
+        customEdgeStates: getDefaultEdgeStatesForSplitMode(prev.splitMode),
+      };
+    });
+  }, []);
+
+  const handleSetEdgeMode = useCallback(
+    (edgeId: FoldEdgeId, nextMode: EdgeJoinMode) => {
+      const baseStates = config.freeMergeMode
+        ? config.customEdgeStates
+        : getDefaultEdgeStatesForSplitMode(config.splitMode);
+      const testCfg: DuctConfig = {
+        ...config,
+        freeMergeMode: true,
+        autoSplit: false,
+        customEdgeStates: baseStates,
+      };
+      if (nextMode === 'bend') {
+        const check = validateSetEdgeToBend(testCfg, edgeId);
+        if (!check.allowed) {
+          setFreeMergeNotice({
+            message:
+              check.reason ??
+              'Không thể nối kín vòng — cần tách ít nhất 1 cạnh để trải phẳng',
+            targetEdgeId: edgeId,
+            suggestedSplitEdgeId: check.suggestedSplitEdgeId,
+            suggestedSplitLabel: check.suggestedSplitEdgeId
+              ? FOLD_EDGE_DEFS[check.suggestedSplitEdgeId].shortLabel
+              : undefined,
+          });
+          return;
+        }
+      }
+      setFreeMergeNotice(null);
+      setConfig({
+        ...testCfg,
+        customEdgeStates: {
+          ...baseStates,
+          [edgeId]: nextMode,
+        },
+      });
+    },
+    [config]
+  );
+
+  const handleSwapEdgeMerge = useCallback(
+    (mergeEdgeId: FoldEdgeId, splitEdgeId: FoldEdgeId) => {
+      const baseStates = config.freeMergeMode
+        ? config.customEdgeStates
+        : getDefaultEdgeStatesForSplitMode(config.splitMode);
+      setFreeMergeNotice(null);
+      setConfig({
+        ...config,
+        freeMergeMode: true,
+        autoSplit: false,
+        customEdgeStates: {
+          ...baseStates,
+          [splitEdgeId]: 'seam',
+          [mergeEdgeId]: 'bend',
+        },
+      });
+    },
+    [config]
+  );
+
+  const handleApplyFreeMergePreset = useCallback(
+    (preset: 'merge_c1_top' | 'cross_5_face' | 'reset_standard') => {
+      setFreeMergeNotice(null);
+      setConfig((prev) => ({
+        ...prev,
+        freeMergeMode: true,
+        autoSplit: false,
+        customEdgeStates: buildFreeMergePresetEdges(prev, preset),
+      }));
+    },
+    []
+  );
 
   const handleSwapSeams = useCallback(() => {
     setConfig((prev) => ({
@@ -314,9 +424,24 @@ export function App() {
     []
   );
 
+  // Single-click ONLY highlights target; never auto-opens Floating Inspector
   const handleSelectTarget = useCallback((target: SelectionTarget) => {
     setContextMenu(null);
     setSelection(target);
+    if (target === null) {
+      setInspectorOpen(false);
+    }
+  }, []);
+
+  // Double-click, Context Menu action, or sidebar C1/C2 card explicitly opens Floating Inspector
+  const handleOpenInspector = useCallback((target: NonNullable<SelectionTarget>) => {
+    setContextMenu(null);
+    setSelection(target);
+    setInspectorOpen(true);
+  }, []);
+
+  const handleCloseInspector = useCallback(() => {
+    setInspectorOpen(false);
   }, []);
 
   const show3D = viewportMode === '3d' || viewportMode === 'split';
@@ -328,7 +453,9 @@ export function App() {
       ? { prefix: 'Đang chọn mảnh:', code: selection.partCode }
       : selection.kind === 'end'
         ? { prefix: 'Đang chọn đầu:', code: selection.endKey.toUpperCase() }
-        : { prefix: 'Đang chọn mí:', code: CORNER_LABELS[selection.cornerId] }
+        : selection.kind === 'seam'
+          ? { prefix: 'Đang chọn mí:', code: CORNER_LABELS[selection.cornerId] }
+          : { prefix: 'Đang chọn cạnh:', code: FOLD_EDGE_DEFS[selection.edgeId].shortLabel }
     : null;
 
   return (
@@ -341,20 +468,25 @@ export function App() {
           onCollapse={() => setSidebarOpen(false)}
           config={config}
           workshopSettings={workshopSettings}
+          flatPatternDoc={flatPatternDoc}
           selection={selection}
           onSelectTarget={handleSelectTarget}
+          onOpenInspector={handleOpenInspector}
           onChange={handlePatchConfig}
           onDimensionChange={handleDimensionChange}
           onSheetMaterialChange={handleSheetMaterialChange}
           onCopyC1ToC2={handleCopyC1ToC2}
           onSelectSplitMode={handleSelectSplitMode}
           onToggleAutoSplit={handleToggleAutoSplit}
+          onToggleFreeMergeMode={handleToggleFreeMergeMode}
+          onSetEdgeMode={handleSetEdgeMode}
+          onApplyFreeMergePreset={handleApplyFreeMergePreset}
           onSwapSeams={handleSwapSeams}
         />
       )}
 
       {/* Right Main Workspace: Quick Toolbar + 3D / 2D / Split Viewport */}
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <TopToolbar
           config={config}
           viewportMode={viewportMode}
@@ -365,6 +497,43 @@ export function App() {
           onSwapSeams={handleSwapSeams}
           onOpenWorkshopSettings={() => setSettingsModalOpen(true)}
         />
+
+        {/* Cycle-Guard Alert Toast for Face–Edge Free-Merge Mode */}
+        {freeMergeNotice && (
+          <div
+            id="free-merge-cycle-toast"
+            role="alert"
+            className="absolute top-13 left-1/2 z-50 flex max-w-[92%] -translate-x-1/2 flex-wrap items-center gap-2 rounded-xl border border-amber-500/55 bg-[#1a1610]/96 px-3.5 py-2 text-xs text-amber-100 shadow-2xl backdrop-blur-md"
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+            <span className="font-medium">{freeMergeNotice.message}</span>
+            {freeMergeNotice.suggestedSplitEdgeId && (
+              <button
+                id="btn-toast-swap-merge"
+                type="button"
+                onClick={() =>
+                  handleSwapEdgeMerge(
+                    freeMergeNotice.targetEdgeId,
+                    freeMergeNotice.suggestedSplitEdgeId!
+                  )
+                }
+                className="rounded-md bg-amber-500/25 px-2.5 py-1 text-[11px] font-semibold text-amber-100 ring-1 ring-amber-400/50 transition-colors hover:bg-amber-500/35"
+              >
+                Tách {freeMergeNotice.suggestedSplitLabel} &amp; gộp{' '}
+                {FOLD_EDGE_DEFS[freeMergeNotice.targetEdgeId].shortLabel}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setFreeMergeNotice(null)}
+              aria-label="Đóng cảnh báo"
+              className="rounded p-0.5 text-amber-300 hover:bg-amber-500/20 hover:text-white"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
         <div
           className={`relative min-h-0 flex-1 overflow-hidden ${
             isSplit ? 'grid grid-cols-1 lg:grid-cols-2' : 'flex'
@@ -387,6 +556,7 @@ export function App() {
               selection={selection}
               active={show3D}
               onSelectTarget={handleSelectTarget}
+              onOpenInspector={handleOpenInspector}
               onOpenContextMenu={handleOpenContextMenu}
             />
             {show3D && (
@@ -394,7 +564,9 @@ export function App() {
                 config={config}
                 sidebarOpen={sidebarOpen}
                 selection={selection}
-                onClearSelection={() => setSelection(null)}
+                inspectorOpen={inspectorOpen}
+                onClearSelection={() => handleSelectTarget(null)}
+                onOpenInspector={handleOpenInspector}
                 onExpandSidebar={() => setSidebarOpen(true)}
                 onCameraPreset={handleCameraPreset}
                 compact={isSplit}
@@ -405,68 +577,87 @@ export function App() {
           {/* Pluggable 2D Laser Flat-Pattern Viewport Pane */}
           {show2D && (
             <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
-              {/* When in pure 2D mode, keep sidebar expand & selected-target pill accessible */}
-              {!show3D && (!sidebarOpen || pure2dPill) && (
-                <div className="absolute top-12 left-3 z-20 flex items-center gap-2">
-                  {!sidebarOpen && (
-                    <button
-                      id="btn-expand-sidebar"
-                      type="button"
-                      onClick={() => setSidebarOpen(true)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#2a3950] bg-[#0e141e]/90 px-3 py-1.5 text-xs font-medium text-sky-200 shadow-lg backdrop-blur-md transition-colors hover:border-sky-500/60 hover:bg-[#162030] hover:text-white"
-                      title="Mở lại bảng điều khiển bên trái"
-                    >
-                      <PanelLeftOpen className="h-4 w-4 text-sky-400" />
-                      <span>Bảng điều khiển</span>
-                    </button>
-                  )}
-                  {pure2dPill && (
-                    <div
-                      id="pill-selected-part"
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/55 bg-sky-500/18 px-2.5 py-1 text-xs font-medium text-sky-100 shadow-lg backdrop-blur-md"
-                    >
-                      <span>{pure2dPill.prefix}</span>
-                      <strong className="font-mono font-bold text-white">{pure2dPill.code}</strong>
-                      <button
-                        type="button"
-                        onClick={() => setSelection(null)}
-                        aria-label="Bỏ chọn"
-                        className="ml-0.5 rounded p-0.5 text-sky-200 hover:bg-sky-400/25 hover:text-white"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
               <FlatPattern2DViewer
                 document={flatPatternDoc}
                 technicalMode={config.materialMode === 'technical'}
                 selection={selection}
                 onSelectTarget={handleSelectTarget}
+                onOpenInspector={handleOpenInspector}
                 onOpenContextMenu={handleOpenContextMenu}
                 focusPartRequest={focusPartRequest}
                 compact={isSplit}
+                topLeftOverlay={
+                  !show3D && (!sidebarOpen || (selection && pure2dPill)) ? (
+                    <>
+                      {!sidebarOpen && (
+                        <button
+                          id="btn-expand-sidebar"
+                          type="button"
+                          onClick={() => setSidebarOpen(true)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-[#2a3950] bg-[#0e141e]/90 px-3 py-1.5 text-xs font-medium text-sky-200 shadow-lg backdrop-blur-md transition-colors hover:border-sky-500/60 hover:bg-[#162030] hover:text-white"
+                          title="Mở lại bảng điều khiển bên trái"
+                        >
+                          <PanelLeftOpen className="h-4 w-4 text-sky-400" />
+                          <span>Bảng điều khiển</span>
+                        </button>
+                      )}
+                      {selection && pure2dPill && (
+                        <div
+                          id="pill-selected-part"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/55 bg-sky-500/18 px-2.5 py-1 text-xs font-medium text-sky-100 shadow-lg backdrop-blur-md"
+                        >
+                          <span>{pure2dPill.prefix}</span>
+                          <strong className="font-mono font-bold text-white">{pure2dPill.code}</strong>
+                          {!inspectorOpen && (
+                            <button
+                              id="btn-pill-open-inspector"
+                              type="button"
+                              onClick={() => handleOpenInspector(selection)}
+                              title="Mở thẻ tùy chỉnh nhanh (hoặc Click đúp lên đối tượng)"
+                              className="ml-0.5 inline-flex items-center gap-1 rounded bg-sky-400/20 px-1.5 py-0.5 text-[10.5px] font-semibold text-sky-100 hover:bg-sky-400/35 hover:text-white"
+                            >
+                              <Sliders className="h-3 w-3" />
+                              <span>Chỉnh</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleSelectTarget(null)}
+                            aria-label="Bỏ chọn"
+                            className="rounded p-0.5 text-sky-200 hover:bg-sky-400/25 hover:text-white"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  ) : null
+                }
               />
             </div>
           )}
         </div>
       </main>
 
-      {/* Right-Click CAD Context Menu & Compact Floating Inspector Card */}
+      {/* Right-Click CAD Context Menu & Compact Floating Inspector Card (Double-Click to Open) */}
       <SelectionContextUI
         config={config}
         workshopSettings={workshopSettings}
+        flatPatternDoc={flatPatternDoc}
         selection={selection}
+        inspectorOpen={inspectorOpen}
         contextMenu={contextMenu}
         onCloseContextMenu={() => setContextMenu(null)}
         onSelectTarget={handleSelectTarget}
+        onOpenInspector={handleOpenInspector}
+        onCloseInspector={handleCloseInspector}
         onFocusPiece={handleFocusPiece}
         onUpdateEndConnection={handleUpdateEndConnection}
         onApplyEndToBoth={handleApplyEndToBoth}
         onUpdateCornerSeam={handleUpdateCornerSeam}
         onResetCornerOverrides={handleResetCornerOverrides}
+        onSetEdgeMode={handleSetEdgeMode}
+        onSwapEdgeMerge={handleSwapEdgeMerge}
         onPatchConfig={handlePatchConfig}
       />
 

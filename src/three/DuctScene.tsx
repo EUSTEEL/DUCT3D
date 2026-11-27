@@ -20,6 +20,7 @@ interface DuctSceneProps {
   selection: SelectionTarget;
   active?: boolean;
   onSelectTarget: (target: SelectionTarget) => void;
+  onOpenInspector: (target: NonNullable<SelectionTarget>) => void;
   onOpenContextMenu: (x: number, y: number, target: NonNullable<SelectionTarget>) => void;
 }
 
@@ -220,6 +221,7 @@ export function DuctScene({
   selection,
   active = true,
   onSelectTarget,
+  onOpenInspector,
   onOpenContextMenu,
 }: DuctSceneProps) {
   const halfHM = (config.H / 2) * MM_TO_M;
@@ -416,6 +418,7 @@ export function DuctScene({
           ribPitchMm={ribPitchMm}
           selection={selection}
           onSelectTarget={onSelectTarget}
+          onOpenInspector={onOpenInspector}
           onContextMenuTarget={handleMeshRightPointerUp}
         />
 
@@ -435,7 +438,7 @@ export function DuctScene({
         />
 
         <ContactShadows
-          key={`${config.W}-${config.H}-${config.L}-${config.splitMode}-${config.c1.type}-${config.c2.type}-${Math.round(config.explode / 5)}`}
+          key={`${config.W}-${config.H}-${config.L}-${config.splitMode}-${config.freeMergeMode ? 'fm' : 'std'}-${config.c1.type}-${config.c2.type}-${Math.round(config.explode / 5)}`}
           position={[0, floorY + 0.002, 0]}
           opacity={0.42}
           scale={shadowExtent * 2.2}

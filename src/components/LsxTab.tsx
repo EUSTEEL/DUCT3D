@@ -77,6 +77,8 @@ export function LsxTab({ config, workshopSettings, onApplyConfig }: LsxTabProps)
       c1: nextC1,
       c2: nextC2,
       autoSplit: true,
+      freeMergeMode: false,
+      customEdgeStates: {},
       splitMode: rec.recommended,
       seamOverrides: {},
     });
@@ -93,6 +95,8 @@ export function LsxTab({ config, workshopSettings, onApplyConfig }: LsxTabProps)
         sheetMaterial: config.sheetMaterial,
         thickness: config.thickness,
         splitMode: config.splitMode,
+        freeMergeMode: config.freeMergeMode,
+        customEdgeStates: config.customEdgeStates,
         globalSeamType: config.globalSeamType,
         weldOverlapWidth: config.weldOverlapWidth,
         swapSeamRoles: config.swapSeamRoles,
@@ -133,6 +137,17 @@ export function LsxTab({ config, workshopSettings, onApplyConfig }: LsxTabProps)
       if (typeof obj.splitMode === 'string') {
         patch.splitMode = obj.splitMode;
         patch.autoSplit = false;
+      }
+      if (typeof obj.freeMergeMode === 'boolean') {
+        patch.freeMergeMode = obj.freeMergeMode;
+        if (obj.freeMergeMode) patch.autoSplit = false;
+      } else {
+        patch.freeMergeMode = false;
+      }
+      if (obj.customEdgeStates && typeof obj.customEdgeStates === 'object') {
+        patch.customEdgeStates = obj.customEdgeStates;
+      } else {
+        patch.customEdgeStates = {};
       }
       if (typeof obj.globalSeamType === 'string') patch.globalSeamType = obj.globalSeamType;
       if (typeof obj.weldOverlapWidth === 'number') {

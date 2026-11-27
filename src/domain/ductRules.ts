@@ -22,6 +22,13 @@ import {
   getPieceEndAllowanceMm,
   getEndAllowanceLabel,
 } from './endConnectionRules';
+import type { FlatPatternDocument } from '../types/flatPattern2d';
+import {
+  BODY_EDGE_IDS,
+  FACE_SHORT_LABELS,
+  isBodyWall,
+  resolveFoldGraph,
+} from './foldGraph';
 import { DEFAULT_WORKSHOP_SETTINGS, getActiveSheetDimensions } from './workshopSettings';
 
 export const GALVANIZED_SHEET_WIDTH = 1200; // mm (tấm chuẩn 1200 × 6000 mm)
@@ -193,6 +200,8 @@ export const DEFAULT_DUCT_CONFIG: DuctConfig = {
   thickness: 0.75,
   autoSplit: true,
   splitMode: '1_piece',
+  freeMergeMode: false,
+  customEdgeStates: {},
   globalSeamType: 'pittsburgh',
   weldOverlapWidth: 10,
   swapSeamRoles: false,
@@ -460,6 +469,9 @@ export function getSplitTopologies(splitMode: SplitMode): PieceTopology[] {
 
 /** Resolve sequential part code ('1-B', '1-E', '1-F'...) for an End Cap on C1 or C2 */
 export function getEndCapPartCode(config: DuctConfig, endKey: 'c1' | 'c2'): string {
+  const graph = resolveFoldGraph(config);
+  const comp = graph.faceToComponent.get(endKey === 'c1' ? 'cap_c1' : 'cap_c2');
+  if (comp) return comp.partCode;
   const bodyCount = getSplitTopologies(config.splitMode).length;
   if (endKey === 'c1') return indexToPartCode(bodyCount);
   const offset = config.c1.type === 'end_cap' ? 1 : 0;
@@ -467,103 +479,27 @@ export function getEndCapPartCode(config: DuctConfig, endKey: 'c1' | 'c2'): stri
 }
 
 /**
- * Resolves active longitudinal corner seams for the current split mode,
+ * Resolves active longitudinal corner seams for BOTH standard split modes AND free-merge mode,
  * enforcing factory default female/male orientation (larger side carries Mí kép)
  * while supporting global swap and per-corner overrides.
  */
 export function resolveActiveSeams(config: DuctConfig): ResolvedCornerSeam[] {
-  const { W, H, splitMode, globalSeamType, weldOverlapWidth, swapSeamRoles, seamOverrides } = config;
-  const wIsLarger = W >= H;
-
-  let baseSeams: { cornerId: CornerId; defaultFemale: WallId; defaultMale: WallId }[] = [];
-
-  switch (splitMode) {
-    case '1_piece':
-      baseSeams = [
-        {
-          cornerId: 'TR',
-          defaultFemale: wIsLarger ? 'top' : 'right',
-          defaultMale: wIsLarger ? 'right' : 'top',
-        },
-      ];
-      break;
-    case '2_piece_L':
-      baseSeams = [
-        {
-          cornerId: 'TR',
-          defaultFemale: wIsLarger ? 'top' : 'right',
-          defaultMale: wIsLarger ? 'right' : 'top',
-        },
-        {
-          cornerId: 'BL',
-          defaultFemale: wIsLarger ? 'bottom' : 'left',
-          defaultMale: wIsLarger ? 'left' : 'bottom',
-        },
-      ];
-      break;
-    case '2_piece_UI':
-      baseSeams = [
-        {
-          cornerId: 'TR',
-          defaultFemale: 'right',
-          defaultMale: 'top',
-        },
-        {
-          cornerId: 'TL',
-          defaultFemale: 'left',
-          defaultMale: 'top',
-        },
-      ];
-      break;
-    case '4_piece':
-      baseSeams = [
-        {
-          cornerId: 'TR',
-          defaultFemale: wIsLarger ? 'top' : 'right',
-          defaultMale: wIsLarger ? 'right' : 'top',
-        },
-        {
-          cornerId: 'TL',
-          defaultFemale: wIsLarger ? 'top' : 'left',
-          defaultMale: wIsLarger ? 'left' : 'top',
-        },
-        {
-          cornerId: 'BR',
-          defaultFemale: wIsLarger ? 'bottom' : 'right',
-          defaultMale: wIsLarger ? 'right' : 'bottom',
-        },
-        {
-          cornerId: 'BL',
-          defaultFemale: wIsLarger ? 'bottom' : 'left',
-          defaultMale: wIsLarger ? 'left' : 'bottom',
-        },
-      ];
-      break;
+  const graph = resolveFoldGraph(config);
+  const seams: ResolvedCornerSeam[] = [];
+  for (const cid of BODY_EDGE_IDS) {
+    const edge = graph.edges[cid];
+    if (!edge || edge.mode !== 'seam') continue;
+    seams.push({
+      cornerId: cid,
+      label: CORNER_LABELS[cid],
+      seamType: edge.seamType,
+      weldOverlapWidth: edge.weldOverlapWidth,
+      femaleWall: edge.femaleFace as WallId,
+      maleWall: edge.maleFace as WallId,
+      isOverridden: edge.isOverridden,
+    });
   }
-
-  return baseSeams.map((base) => {
-    const override = seamOverrides[base.cornerId];
-    const seamType = override?.seamType ?? globalSeamType;
-    const overlapW = override?.weldOverlapWidth ?? weldOverlapWidth;
-    const flip = Boolean(swapSeamRoles) !== Boolean(override?.inverted);
-    const femaleWall = flip ? base.defaultMale : base.defaultFemale;
-    const maleWall = flip ? base.defaultFemale : base.defaultMale;
-    const isOverridden =
-      override !== undefined &&
-      (override.seamType !== undefined ||
-        override.weldOverlapWidth !== undefined ||
-        override.inverted === true);
-
-    return {
-      cornerId: base.cornerId,
-      label: CORNER_LABELS[base.cornerId],
-      seamType,
-      weldOverlapWidth: overlapW,
-      femaleWall,
-      maleWall,
-      isOverridden,
-    };
-  });
+  return seams;
 }
 
 export function getWallLength(wall: WallId, W: number, H: number): number {
@@ -647,123 +583,161 @@ function formatEndCapEdgeShort(seam: SeamType, lapW: number): string {
 }
 
 /**
- * Calculate exact blank sheet dimensions & area (m²) for every body piece (`1-A`..`1-D`)
- * (per-piece L_phôi = L + bù C1(walls) + bù C2(walls)) AND any removable End Cap (`1-B`/`1-E`/`1-F`).
+ * Calculate exact blank sheet dimensions & area (m²) for every piece resolved from
+ * the active Face–Edge Graph (supporting standard splits AND free-merge 5/6-face nets!).
+ * When `flatDoc` is provided, exact bounding-box dimensions and 2D overlap flags mirror the 2D blueprint 100%.
  * Never calculates or exposes weight (kg).
  */
 export function calculateBlankAnalysis(
   config: DuctConfig,
-  settings: WorkshopSettings = DEFAULT_WORKSHOP_SETTINGS
+  settings: WorkshopSettings = DEFAULT_WORKSHOP_SETTINGS,
+  flatDoc?: FlatPatternDocument
 ): PieceBlankInfo[] {
-  const topologies = getSplitTopologies(config.splitMode);
+  const graph = resolveFoldGraph(config);
   const seams = resolveActiveSeams(config);
   const seamMap = new Map<CornerId, ResolvedCornerSeam>(seams.map((s) => [s.cornerId, s]));
   const { widthMm: sheetW, lengthMm: sheetL } = getActiveSheetDimensions(config.sheetMaterial, settings);
+  const flatPieceMap = new Map(flatDoc?.pieces.map((p) => [p.id, p]) ?? []);
 
-  const pieces: PieceBlankInfo[] = topologies.map((topo) => {
-    const startWall = topo.walls[0];
-    const endWall = topo.walls[topo.walls.length - 1];
-    const startSeam = seamMap.get(topo.startCorner)!;
-    const endSeam = seamMap.get(topo.endCorner)!;
+  return graph.components.map((comp) => {
+    const flatPiece = flatPieceMap.get(comp.id);
 
-    const startEdge = getEdgeSeamAllowance(startSeam, startWall);
-    const endEdge = getEdgeSeamAllowance(endSeam, endWall);
+    // 1. Standalone detached End Cap panel
+    if (comp.isPureEndCap && comp.endCapKey) {
+      const endKey = comp.endCapKey;
+      const conn = config[endKey];
+      const leftA = getEndCapPanelEdgeAllowance(conn, 'left');
+      const rightA = getEndCapPanelEdgeAllowance(conn, 'right');
+      const topA = getEndCapPanelEdgeAllowance(conn, 'top');
+      const botA = getEndCapPanelEdgeAllowance(conn, 'bottom');
 
-    const c1Allowance = getPieceEndAllowanceMm(config.c1, topo.walls);
-    const c2Allowance = getPieceEndAllowanceMm(config.c2, topo.walls);
-    const c1Label = getEndAllowanceLabel(config.c1, topo.walls);
-    const c2Label = getEndAllowanceLabel(config.c2, topo.walls);
-    const blankLength = config.L + c1Allowance + c2Allowance;
+      const capW = flatPiece ? Math.round(flatPiece.widthMm * 10) / 10 : config.W + leftA + rightA;
+      const capH = flatPiece ? Math.round(flatPiece.heightMm * 10) / 10 : config.H + topA + botA;
+      const areaM2 = (capW / 1000) * (capH / 1000);
+      const lapW = conn.endCapWeldOverlapWidth;
+      const { cutOrientation, cutNote } = evaluateCutOrientation(capW, capH, sheetW, sheetL);
+      const bendCount = (['top', 'bottom', 'left', 'right'] as WallId[]).filter(
+        (w) => getEndCapEdgeSeam(conn, w) !== 'weld_butt'
+      ).length;
 
-    const wallSpanSum = topo.walls.reduce((sum, w) => sum + getWallLength(w, config.W, config.H), 0);
-    const developedWidth = wallSpanSum + startEdge.allowance + endEdge.allowance;
-    const bendCount = Math.max(0, topo.walls.length - 1);
+      return {
+        id: comp.id,
+        partCode: comp.partCode,
+        name: comp.name,
+        isEndCap: true,
+        endKey,
+        walls: [],
+        faces: comp.faces,
+        wallsLabel: `Mặt bịt ${config.W} × ${config.H}`,
+        wallSpanSum: config.W,
+        startSeamLabel: formatEndCapEdgeShort(getEndCapEdgeSeam(conn, 'left'), lapW),
+        startAllowance: leftA,
+        endSeamLabel: formatEndCapEdgeShort(getEndCapEdgeSeam(conn, 'right'), lapW),
+        endAllowance: rightA,
+        c1Allowance: topA,
+        c1Label: formatEndCapEdgeShort(getEndCapEdgeSeam(conn, 'top'), lapW),
+        c2Allowance: botA,
+        c2Label: formatEndCapEdgeShort(getEndCapEdgeSeam(conn, 'bottom'), lapW),
+        baseLength: config.H,
+        developedWidth: capW,
+        blankLength: capH,
+        bendCount,
+        areaM2,
+        cutOrientation,
+        cutNote,
+      };
+    }
+
+    // 2. Linear purely body-wall component
+    if (comp.isPureBodyLinear && comp.linearBodyWalls && comp.startCorner && comp.endCorner) {
+      const walls = comp.linearBodyWalls;
+      const startWall = walls[0];
+      const endWall = walls[walls.length - 1];
+      const startSeam = seamMap.get(comp.startCorner)!;
+      const endSeam = seamMap.get(comp.endCorner)!;
+      const startEdge = getEdgeSeamAllowance(startSeam, startWall);
+      const endEdge = getEdgeSeamAllowance(endSeam, endWall);
+
+      const c1Allowance = getPieceEndAllowanceMm(config.c1, walls);
+      const c2Allowance = getPieceEndAllowanceMm(config.c2, walls);
+      const c1Label = getEndAllowanceLabel(config.c1, walls);
+      const c2Label = getEndAllowanceLabel(config.c2, walls);
+      const blankLength = flatPiece ? Math.round(flatPiece.heightMm * 10) / 10 : config.L + c1Allowance + c2Allowance;
+
+      const wallSpanSum = walls.reduce((sum, w) => sum + getWallLength(w, config.W, config.H), 0);
+      const developedWidth = flatPiece ? Math.round(flatPiece.widthMm * 10) / 10 : wallSpanSum + startEdge.allowance + endEdge.allowance;
+      const bendCount = comp.bendCount;
+      const areaM2 = (developedWidth / 1000) * (blankLength / 1000);
+      const { cutOrientation, cutNote } = evaluateCutOrientation(developedWidth, blankLength, sheetW, sheetL);
+
+      return {
+        id: comp.id,
+        partCode: comp.partCode,
+        name: comp.name,
+        walls,
+        faces: comp.faces,
+        wallsLabel: walls.map((w) => WALL_LABELS[w]).join(' + '),
+        wallSpanSum,
+        startSeamLabel: startEdge.label,
+        startAllowance: startEdge.allowance,
+        endSeamLabel: endEdge.label,
+        endAllowance: endEdge.allowance,
+        c1Allowance,
+        c1Label,
+        c2Allowance,
+        c2Label,
+        baseLength: config.L,
+        developedWidth,
+        blankLength,
+        bendCount,
+        areaM2,
+        cutOrientation,
+        cutNote,
+      };
+    }
+
+    // 3. Free-merge multi-face tree component (merges body walls + end cap(s) via 90° bends!)
+    const walls = comp.faces.filter(isBodyWall);
+    const wallSpanSum = walls.reduce((sum, w) => sum + getWallLength(w, config.W, config.H), 0);
+    const capExtraH =
+      (comp.faces.includes('cap_c1') ? config.H : 0) + (comp.faces.includes('cap_c2') ? config.H : 0);
+    const developedWidth = flatPiece
+      ? Math.round(flatPiece.widthMm * 10) / 10
+      : Math.max(config.W, wallSpanSum) + 38;
+    const blankLength = flatPiece
+      ? Math.round(flatPiece.heightMm * 10) / 10
+      : config.L + capExtraH + 55;
     const areaM2 = (developedWidth / 1000) * (blankLength / 1000);
-    const { cutOrientation, cutNote } = evaluateCutOrientation(
-      developedWidth,
-      blankLength,
-      sheetW,
-      sheetL
-    );
+    const { cutOrientation, cutNote } = evaluateCutOrientation(developedWidth, blankLength, sheetW, sheetL);
 
     return {
-      id: topo.id,
-      partCode: topo.partCode,
-      name: topo.name,
-      walls: topo.walls,
-      wallsLabel: topo.walls.map((w) => WALL_LABELS[w]).join(' + '),
+      id: comp.id,
+      partCode: comp.partCode,
+      name: comp.name,
+      isMergedTree: true,
+      walls,
+      faces: comp.faces,
+      wallsLabel: comp.faces.map((f) => FACE_SHORT_LABELS[f]).join(' + '),
       wallSpanSum,
-      startSeamLabel: startEdge.label,
-      startAllowance: startEdge.allowance,
-      endSeamLabel: endEdge.label,
-      endAllowance: endEdge.allowance,
-      c1Allowance,
-      c1Label,
-      c2Allowance,
-      c2Label,
+      startSeamLabel: 'Ghép tự do',
+      startAllowance: 0,
+      endSeamLabel: `${comp.faces.length} mặt liền`,
+      endAllowance: 0,
+      c1Allowance: getPieceEndAllowanceMm(config.c1, walls.length > 0 ? walls : ['top']),
+      c1Label: getEndAllowanceLabel(config.c1, walls.length > 0 ? walls : ['top']),
+      c2Allowance: getPieceEndAllowanceMm(config.c2, walls.length > 0 ? walls : ['top']),
+      c2Label: getEndAllowanceLabel(config.c2, walls.length > 0 ? walls : ['top']),
       baseLength: config.L,
       developedWidth,
       blankLength,
-      bendCount,
+      bendCount: comp.bendCount,
       areaM2,
       cutOrientation,
       cutNote,
+      hasOverlap2D: flatPiece?.hasOverlap2D,
+      overlapWarning: flatPiece?.overlapWarning,
     };
   });
-
-  // Automatically append removable End Cap blank(s) with exact per-edge allowances
-  const endCapSides: { key: 'c1' | 'c2'; label: 'C1' | 'C2'; conn: EndConnectionConfig }[] = [
-    { key: 'c1', label: 'C1', conn: config.c1 },
-    { key: 'c2', label: 'C2', conn: config.c2 },
-  ];
-
-  for (const side of endCapSides) {
-    if (side.conn.type !== 'end_cap') continue;
-    const partCode = getEndCapPartCode(config, side.key);
-    const leftA = getEndCapPanelEdgeAllowance(side.conn, 'left');
-    const rightA = getEndCapPanelEdgeAllowance(side.conn, 'right');
-    const topA = getEndCapPanelEdgeAllowance(side.conn, 'top');
-    const botA = getEndCapPanelEdgeAllowance(side.conn, 'bottom');
-
-    const capW = config.W + leftA + rightA;
-    const capH = config.H + topA + botA;
-    const areaM2 = (capW / 1000) * (capH / 1000);
-    const lapW = side.conn.endCapWeldOverlapWidth;
-
-    const { cutOrientation, cutNote } = evaluateCutOrientation(capW, capH, sheetW, sheetL);
-
-    const bendCount = (['top', 'bottom', 'left', 'right'] as WallId[]).filter(
-      (w) => getEndCapEdgeSeam(side.conn, w) !== 'weld_butt'
-    ).length;
-
-    pieces.push({
-      id: `CAP-${side.label}`,
-      partCode,
-      name: `Mảnh bịt đầu rời (${side.label})`,
-      isEndCap: true,
-      endKey: side.key,
-      walls: [],
-      wallsLabel: `Mặt bịt ${config.W} × ${config.H}`,
-      wallSpanSum: config.W,
-      startSeamLabel: formatEndCapEdgeShort(getEndCapEdgeSeam(side.conn, 'left'), lapW),
-      startAllowance: leftA,
-      endSeamLabel: formatEndCapEdgeShort(getEndCapEdgeSeam(side.conn, 'right'), lapW),
-      endAllowance: rightA,
-      c1Allowance: topA,
-      c1Label: formatEndCapEdgeShort(getEndCapEdgeSeam(side.conn, 'top'), lapW),
-      c2Allowance: botA,
-      c2Label: formatEndCapEdgeShort(getEndCapEdgeSeam(side.conn, 'bottom'), lapW),
-      baseLength: config.H,
-      developedWidth: capW,
-      blankLength: capH,
-      bendCount,
-      areaM2,
-      cutOrientation,
-      cutNote,
-    });
-  }
-
-  return pieces;
 }
 
 export interface ParsedLsxResult {

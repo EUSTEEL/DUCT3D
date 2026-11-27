@@ -8,21 +8,26 @@ import {
 import { getEndAllowanceLabel, getEndAllowanceMm } from '../domain/endConnectionRules';
 import { getActiveSheetDimensions } from '../domain/workshopSettings';
 import type { DuctConfig, WorkshopSettings } from '../types/duct';
+import type { FlatPatternDocument } from '../types/flatPattern2d';
 
 interface BlankAnalysisTabProps {
   config: DuctConfig;
   workshopSettings: WorkshopSettings;
+  flatPatternDoc: FlatPatternDocument;
   selectedPartCode: string | null;
   onSelectPart: (partCode: string | null) => void;
+  onOpenPartInspector: (partCode: string) => void;
 }
 
 export function BlankAnalysisTab({
   config,
   workshopSettings,
+  flatPatternDoc,
   selectedPartCode,
   onSelectPart,
+  onOpenPartInspector,
 }: BlankAnalysisTabProps) {
-  const pieces = calculateBlankAnalysis(config, workshopSettings);
+  const pieces = calculateBlankAnalysis(config, workshopSettings, flatPatternDoc);
   const { widthMm: sheetWidth, lengthMm: sheetLength } = getActiveSheetDimensions(
     config.sheetMaterial,
     workshopSettings
@@ -44,11 +49,13 @@ export function BlankAnalysisTab({
 
   const totalArea = pieces.reduce((sum, p) => sum + p.areaM2, 0);
   const anyExceeds = pieces.some((p) => p.cutOrientation === 'can_noi_c');
+  const anyOverlap2D = pieces.some((p) => p.hasOverlap2D);
   const anyRollFormer =
     config.stiffenerRibs &&
     config.L >= 220 &&
     pieces.some((p) => !p.isEndCap && p.blankLength > workshopSettings.rollFormerLimitMm);
   const endCapCount = pieces.filter((p) => p.isEndCap).length;
+  const mergedCount = pieces.filter((p) => p.isMergedTree).length;
 
   return (
     <div className="space-y-4 pb-5">
@@ -65,9 +72,11 @@ export function BlankAnalysisTab({
             {totalArea.toFixed(2)} <span className="text-xs font-normal text-slate-400">m²</span>
           </div>
           <div className="mt-0.5 truncate text-[10px] text-slate-400">
-            {endCapCount > 0
-              ? `${pieces.length - endCapCount} thân + ${endCapCount} bịt đầu`
-              : `${pieces.length} mảnh thân ống`}
+            {mergedCount > 0
+              ? `${pieces.length} mảnh (${mergedCount} mảnh gộp)`
+              : endCapCount > 0
+                ? `${pieces.length - endCapCount} thân + ${endCapCount} bịt đầu`
+                : `${pieces.length} mảnh thân ống`}
           </div>
         </div>
         <div
@@ -84,10 +93,31 @@ export function BlankAnalysisTab({
         </div>
       </section>
 
+      {/* Orange 2D Overlap Alert when a Free-Merge custom spanning tree overlaps in 2D */}
+      {anyOverlap2D && (
+        <section
+          id="blank-overlap-warning"
+          className="rounded-lg border border-orange-500/50 bg-orange-500/12 p-2.5 text-[11px] leading-snug text-orange-200"
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-orange-400" />
+            <div>
+              <div className="font-semibold text-orange-100">
+                Phát hiện vùng phôi 2D chồng lấn khi trải phẳng
+              </div>
+              <p className="mt-0.5 text-[10.5px] text-orange-200/90">
+                Kiểu ghép mảnh tự do hiện tại có các mặt đè lên nhau trên mặt phẳng 2D (đã tô viền
+                cam). Hãy đổi cạnh liền mảnh khác hoặc tách bớt cạnh trước khi xuất DXF cắt Laser.
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* Dynamic Blank Length Breakdown: L_phôi = L + bù C1 + bù C2 */}
       <section className="rounded-lg border border-[#223044] bg-[#0e1520] p-2.5 text-[11px]">
         <div className="mb-1.5 flex items-center justify-between">
-          <span className="font-semibold text-slate-300">Chiều dài phôi tối đa (L phôi)</span>
+          <span className="font-semibold text-slate-300">Chiều dài phôi thân (L phôi)</span>
           <span
             id="kpi-blank-length"
             className={`font-mono text-xs font-bold tabular-nums ${
@@ -147,8 +177,13 @@ export function BlankAnalysisTab({
                     : `Đạt — Tất cả ${pieces.length} mảnh lọt tấm ${sheetWidth}×${sheetLength} mm`}
               </div>
               <div className="mt-0.5 text-slate-300">
-                Kiểu chia hiện tại: <strong>{SPLIT_MODE_LABELS[config.splitMode]}</strong>
-                {config.splitMode !== rec.recommended && (
+                Kiểu chia hiện tại:{' '}
+                <strong>
+                  {config.freeMergeMode
+                    ? 'Chế độ ghép mảnh tự do'
+                    : SPLIT_MODE_LABELS[config.splitMode]}
+                </strong>
+                {!config.freeMergeMode && config.splitMode !== rec.recommended && (
                   <span className="text-sky-300">
                     {' '}
                     (Đề xuất: {SPLIT_MODE_LABELS[rec.recommended]})
@@ -188,13 +223,16 @@ export function BlankAnalysisTab({
                 key={p.id}
                 data-piece-id={p.id}
                 data-part-code={p.partCode}
-                onClick={() => onSelectPart(isSelected ? null : p.partCode)}
+                onClick={() => onSelectPart(p.partCode)}
+                onDoubleClick={() => onOpenPartInspector(p.partCode)}
                 className={`cursor-pointer rounded-lg border p-2.5 text-[11px] transition-colors ${
-                  isSelected
-                    ? 'border-sky-400 bg-sky-500/12 ring-1 ring-sky-400/40'
-                    : p.isEndCap
-                      ? 'border-sky-500/40 bg-[#131d2c] hover:border-sky-400/60'
-                      : 'border-[#232e40] bg-[#141b26] hover:border-[#344662]'
+                  p.hasOverlap2D
+                    ? 'border-orange-500/65 bg-orange-500/8'
+                    : isSelected
+                      ? 'border-sky-400 bg-sky-500/12 ring-1 ring-sky-400/40'
+                      : p.isEndCap || p.isMergedTree
+                        ? 'border-sky-500/40 bg-[#131d2c] hover:border-sky-400/60'
+                        : 'border-[#232e40] bg-[#141b26] hover:border-[#344662]'
                 }`}
               >
                 <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -206,9 +244,11 @@ export function BlankAnalysisTab({
                   </div>
                   <span
                     className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${
-                      p.isEndCap
-                        ? 'bg-sky-500/20 text-sky-200'
-                        : 'bg-[#1e2a3c] text-sky-300'
+                      p.isMergedTree
+                        ? 'bg-emerald-500/20 text-emerald-200'
+                        : p.isEndCap
+                          ? 'bg-sky-500/20 text-sky-200'
+                          : 'bg-[#1e2a3c] text-sky-300'
                     }`}
                   >
                     {p.bendCount} đường chấn
@@ -223,7 +263,20 @@ export function BlankAnalysisTab({
                 </div>
 
                 <div className="space-y-1 text-[10.5px] text-slate-400">
-                  {p.isEndCap ? (
+                  {p.isMergedTree ? (
+                    <>
+                      <div className="flex justify-between">
+                        <span>Các mặt gộp liền:</span>
+                        <span className="font-mono text-emerald-200">{p.wallsLabel}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Khung bao trải phẳng 2D:</span>
+                        <span className="font-mono text-slate-200">
+                          {p.developedWidth} × {p.blankLength} mm
+                        </span>
+                      </div>
+                    </>
+                  ) : p.isEndCap ? (
                     <>
                       <div className="flex justify-between">
                         <span>Mặt bịt (W × H):</span>
@@ -273,6 +326,12 @@ export function BlankAnalysisTab({
                     </span>
                   </div>
                 </div>
+
+                {p.hasOverlap2D && (
+                  <div className="mt-2 rounded bg-orange-500/20 px-2 py-1 text-[10px] font-semibold text-orange-200">
+                    ⚠ {p.overlapWarning ?? 'Trùng vùng phôi 2D — hãy đổi cạnh ghép'}
+                  </div>
+                )}
 
                 <div
                   className={`mt-2 rounded px-2 py-1 text-[10px] font-medium ${
