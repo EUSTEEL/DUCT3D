@@ -90,6 +90,8 @@ export interface WallRigNode {
   flatRotYRad: number;
   /** Child face center offset from hinge in child's own local frame (meters) */
   childOffsetInLocalM: [number, number, number];
+  /** Optional gentle outward bend opening fraction [0..1] when Chưa gò mí on single-piece closed bodies */
+  unseamedOpenFactor?: number;
   geometry: THREE.BufferGeometry;
   edgesGeometry: THREE.EdgesGeometry;
   faceLabel: BuiltFaceLabel;
@@ -159,6 +161,10 @@ export interface PiecePoseRuntime {
   bodyFoldFactor: number;
   /** 1 = fully folded integral flanges & seams; 0 = 0° flat sheet */
   detailFoldFactor: number;
+  /** Unfold blend [0..1] for body/cap bends (0 = folded/exploded, 1 = completely flat) */
+  unfoldBodyBlend: number;
+  /** Outward bend opening fraction [0..1] for single-piece Tách mảnh (0 for multi-piece rigs) */
+  singlePieceExplodeOpen: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1478,6 +1484,28 @@ function buildFaceRigNode(
     buildFaceRigNode(comp, ch, config, foldGraph, bodyRibZPositions, ribPitchMm)
   );
 
+  // On a single-piece 4-wall body (e.g. 1 mảnh O), gently spring open the wall carrying the male
+  // edge of the sole body seam when switching to `Chưa gò mí` so the +7 mm tab lifts clear of the pocket.
+  let unseamedOpenFactor: number | undefined;
+  if (!isRoot && isBodyWall(face)) {
+    const compBodyCount = comp.faces.filter(isBodyWall).length;
+    if (compBodyCount === 4) {
+      const bodySeamCorners = (['TL', 'TR', 'BR', 'BL'] as CornerId[]).filter(
+        (cid) => foldGraph.edges[cid].mode === 'seam'
+      );
+      if (bodySeamCorners.length === 1) {
+        const openSeam = foldGraph.edges[bodySeamCorners[0]];
+        const springFace =
+          openSeam.maleFace !== comp.rootFace ? openSeam.maleFace : openSeam.femaleFace;
+        if (face === springFace) {
+          const liftMm = openSeam.seamType === 'pittsburgh' ? 13.5 : 8.5;
+          const spanMm = getWallLength(face, W, H);
+          unseamedOpenFactor = Math.asin(Math.min(0.25, liftMm / Math.max(80, spanMm))) / (Math.PI / 2);
+        }
+      }
+    }
+  }
+
   return {
     id: nodeId,
     face,
@@ -1499,6 +1527,7 @@ function buildFaceRigNode(
       link.childOffsetInLocalMm[1] * MM_TO_M,
       link.childOffsetInLocalMm[2] * MM_TO_M,
     ],
+    unseamedOpenFactor,
     geometry,
     edgesGeometry: new THREE.EdgesGeometry(geometry, 22),
     faceLabel,
@@ -1900,10 +1929,22 @@ export function evaluatePieceRuntimePose(
   _qFlat.identity(); // Local +Y faces world +Y (upward!), local XZ aligns with world XZ!
   _qOut.copy(_qFolded).slerp(_qFlat, uBody);
 
+  // On a single continuous sheet piece (1 mảnh O or a 1-piece merged tree), `Tách mảnh`
+  // smoothly springs open the 90° body/cap bends outward around the anchored root face
+  // so the seam corner & folds separate clearly in sync with detached corner brackets / end caps.
+  const clampedExplode = Math.max(0, Math.min(1, explodeRatio));
+  const maxSinglePieceOpenDeg =
+    piece.rootFace === 'cap_c1' || piece.rootFace === 'cap_c2' ? 16 : 24;
+  const singlePieceExplodeOpen =
+    rig.pieces.length === 1 ? clampedExplode * (maxSinglePieceOpenDeg / 90) : 0;
+  const bodyFoldFactor = Math.max(0, (1 - uBody) * (1 - singlePieceExplodeOpen));
+
   return {
     positionM: [posX * MM_TO_M, posY * MM_TO_M, posZ * MM_TO_M],
     quaternion: [_qOut.x, _qOut.y, _qOut.z, _qOut.w],
-    bodyFoldFactor: 1 - uBody,
+    bodyFoldFactor,
     detailFoldFactor: 1 - uDetail,
+    unfoldBodyBlend: uBody,
+    singlePieceExplodeOpen,
   };
 }

@@ -226,9 +226,11 @@ export function DuctScene({
 }: DuctSceneProps) {
   const halfHM = (config.H / 2) * MM_TO_M;
   const explodeExtraM =
-    config.splitMode === '1_piece'
-      ? (config.explode / 100) * 0.06
-      : (config.explode / 100) * Math.min(0.28, Math.max(config.W, config.H) * MM_TO_M * 0.32);
+    config.freeMergeMode && (config.c1.type === 'end_cap' || config.c2.type === 'end_cap')
+      ? (config.explode / 100) * Math.min(0.36, Math.max(config.W, config.H, config.L) * MM_TO_M * 0.28)
+      : config.splitMode === '1_piece'
+        ? (config.explode / 100) * 0.06
+        : (config.explode / 100) * Math.min(0.28, Math.max(config.W, config.H) * MM_TO_M * 0.32);
   const floorY = -(halfHM + explodeExtraM + 0.14);
 
   const unfoldedSpanM = (2 * (config.W + config.H) + 520) * MM_TO_M;

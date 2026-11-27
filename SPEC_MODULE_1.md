@@ -23,7 +23,7 @@
     - Chế độ hiển thị Viewport: `Xem 3D` | `Trải phẳng 2D` | `Song song 3D + 2D` (kiến trúc cắm-rút: chi tiết không có trải phẳng 2D chỉ cần vô hiệu hóa 2 nút 2D).
     - Chế độ vật liệu: `Tôn Mạ Kẽm` / `Inox` (tự động đồng bộ theo vật liệu đang chọn) ↔ `Tô màu kỹ thuật (Đỏ = Mí kép, Xanh dương = Mí đơn, Vàng = Bích/Đầu nối, Xanh lá = Đường chấn, Cam = Mí hàn)`.
     - Công tắc trạng thái mí: `Chưa gò mí (vừa chạy máy)` ↔ `Đã gò mí hoàn thiện`.
-    - Thanh trượt `Tách mảnh (0% → 100%)`.
+    - Thanh trượt `Tách mảnh (0% → 100%)` (tách rời các mảnh & phụ kiện/ke góc/đầu bịt; riêng cấu hình liền 1 mảnh như `1 mảnh (O)` hoặc khối gộp 1 mảnh tự do sẽ bung mở mượt các góc chấn quanh mặt gốc lên tới `24°` đồng bộ cùng ke góc/bịt đầu để quan sát rõ mí ghép).
     - Thanh trượt **`Mở phôi 3D (0% → 100%)`** (Gập thành phẩm `0%` ↔ Mở phẳng phôi trực tiếp trên 3D `100%`; kiến trúc cắm-rút qua cờ `unfoldSupported` để tự áp dụng cho nhóm phụ kiện vuông chấn phẳng và ẩn ở nhóm phụ kiện lốc tròn).
     - Công tắc bật/tắt **`Nhãn mặt (1-A, 1-B...)`** (mặc định BẬT).
     - Công tắc bật/tắt `Gân tăng cứng` (1 dạng gân thẳng duy nhất, chạy **song song 2 đầu bích C1 & C2**, bước theo `Cài đặt xưởng`, mặc định `210 mm`).

@@ -51,7 +51,13 @@ function applyRigTransforms(
   wallHingeMap.forEach(({ group, node, pieceId }) => {
     const pose = poseByPiece.get(pieceId);
     if (!pose) return;
-    const angle = node.hingeFoldedAngleRad * pose.bodyFoldFactor;
+    const unseamedOpen =
+      node.unseamedOpenFactor && node.unseamedOpenFactor > 0
+        ? (1 - seamLock) * node.unseamedOpenFactor
+        : 0;
+    const openFrac = Math.max(pose.singlePieceExplodeOpen, unseamedOpen);
+    const effectiveFold = Math.max(0, (1 - pose.unfoldBodyBlend) * (1 - openFrac));
+    const angle = node.hingeFoldedAngleRad * effectiveFold;
     if (node.hingeAxis === 'x') {
       group.rotation.x = angle;
       group.rotation.z = 0;
