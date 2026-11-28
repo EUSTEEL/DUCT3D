@@ -1,31 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, PanelLeftOpen, Sliders, Undo2, X } from 'lucide-react';
-import { FlatPattern2DViewer } from './components/FlatPattern2DViewer';
-import { LeftSidebar } from './components/LeftSidebar';
-import { SelectionContextUI } from './components/SelectionContextUI';
-import { TopToolbar } from './components/TopToolbar';
-import { ViewportOverlays } from './components/ViewportOverlays';
-import { WorkshopSettingsModal } from './components/WorkshopSettingsModal';
-import {
-  CORNER_LABELS,
-  DEFAULT_DUCT_CONFIG,
-  evaluateSplitForConfig,
-  normalizeThicknessForMaterial,
-} from './domain/ductRules';
-import { buildStraightDuctFlatPattern } from './domain/flatPattern2D';
 import {
   buildFreeMergePresetEdges,
   FOLD_EDGE_DEFS,
   getDefaultEdgeStatesForSplitMode,
   validateSetEdgeToBend,
   type FreeMergePresetId,
-} from './domain/foldGraph';
+} from './core/foldGraph/foldGraph';
+import {
+  CORNER_SHORT_LABELS,
+  DEFAULT_DUCT_CONFIG,
+  END_LABELS,
+  evaluateSplitForConfig,
+  normalizeThicknessForMaterial,
+} from './core/rules/ductRules';
 import {
   DEFAULT_WORKSHOP_SETTINGS,
   loadWorkshopSettings,
   saveWorkshopSettings,
-} from './domain/workshopSettings';
-import { DuctScene, type CameraCommand } from './three/DuctScene';
+} from './core/rules/workshopSettings';
+import { DuctScene, type CameraCommand } from './core/scene/DuctScene';
 import type {
   CameraPreset,
   ContextMenuState,
@@ -42,9 +36,24 @@ import type {
   SplitMode,
   ViewportMode,
   WorkshopSettings,
-} from './types/duct';
+} from './core/types/duct';
+import { FlatPattern2DViewer } from './core/ui/FlatPattern2DViewer';
+import { LeftSidebar } from './core/ui/LeftSidebar';
+import { SelectionContextUI } from './core/ui/SelectionContextUI';
+import { TopToolbar } from './core/ui/TopToolbar';
+import { ViewportOverlays } from './core/ui/ViewportOverlays';
+import { WorkshopSettingsModal } from './core/ui/WorkshopSettingsModal';
+import {
+  BlankAnalysisTab,
+  buildStraightDuctFlatPattern,
+  DuctAssembly,
+  LsxTab,
+  ParamsTab,
+} from './products/ong-vuong-thang';
+import { DEFAULT_PRODUCT_ID, getProductById } from './products/registry';
 
 export function App() {
+  const [activeProductId, setActiveProductId] = useState<string>(DEFAULT_PRODUCT_ID);
   const [config, setConfig] = useState<DuctConfig>(DEFAULT_DUCT_CONFIG);
   const [workshopSettings, setWorkshopSettings] = useState<WorkshopSettings>(() =>
     loadWorkshopSettings()
@@ -64,6 +73,21 @@ export function App() {
     preset: 'iso',
     seq: 0,
   });
+
+  const activeProduct = useMemo(() => getProductById(activeProductId), [activeProductId]);
+
+  const handleSelectProduct = useCallback((productId: string) => {
+    const nextProduct = getProductById(productId);
+    if (nextProduct.status !== 'active') return;
+    setActiveProductId(nextProduct.id);
+    setSelection(null);
+    setInspectorOpen(false);
+    setContextMenu(null);
+    setFreeMergeNotice(null);
+    if (!nextProduct.capabilities.flatPatternSupported) {
+      setViewportMode('3d');
+    }
+  }, []);
 
   // Persist Workshop Settings to localStorage automatically
   useEffect(() => {
@@ -497,17 +521,21 @@ export function App() {
     setInspectorOpen(false);
   }, []);
 
-  const show3D = viewportMode === '3d' || viewportMode === 'split';
-  const show2D = viewportMode === '2d' || viewportMode === 'split';
-  const isSplit = viewportMode === 'split';
+  const effectiveViewportMode: ViewportMode =
+    !activeProduct.capabilities.flatPatternSupported && viewportMode !== '3d' ? '3d' : viewportMode;
+  const show3D = effectiveViewportMode === '3d' || effectiveViewportMode === 'split';
+  const show2D = effectiveViewportMode === '2d' || effectiveViewportMode === 'split';
+  const isSplit = effectiveViewportMode === 'split';
+
+  const selectedPartCode = selection?.kind === 'piece' ? selection.partCode : null;
 
   const pure2dPill = selection
     ? selection.kind === 'piece'
       ? { prefix: 'Đang chọn mảnh:', code: selection.partCode }
       : selection.kind === 'end'
-        ? { prefix: 'Đang chọn đầu:', code: selection.endKey.toUpperCase() }
+        ? { prefix: 'Đang chọn:', code: END_LABELS[selection.endKey] }
         : selection.kind === 'seam'
-          ? { prefix: 'Đang chọn mí:', code: CORNER_LABELS[selection.cornerId] }
+          ? { prefix: 'Đang chọn mí:', code: CORNER_SHORT_LABELS[selection.cornerId] }
           : { prefix: 'Đang chọn cạnh:', code: FOLD_EDGE_DEFS[selection.edgeId].shortLabel }
     : null;
 
@@ -516,25 +544,51 @@ export function App() {
       {/* Slim Left Engineering Control Sidebar (collapsible for 100% fullscreen 3D/2D) */}
       {sidebarOpen && (
         <LeftSidebar
+          activeProduct={activeProduct}
+          onSelectProduct={handleSelectProduct}
           activeTab={activeTab}
           onSelectTab={setActiveTab}
           onCollapse={() => setSidebarOpen(false)}
-          config={config}
-          workshopSettings={workshopSettings}
-          flatPatternDoc={flatPatternDoc}
-          selection={selection}
-          onSelectTarget={handleSelectTarget}
-          onOpenInspector={handleOpenInspector}
-          onChange={handlePatchConfig}
-          onDimensionChange={handleDimensionChange}
-          onSheetMaterialChange={handleSheetMaterialChange}
-          onCopyC1ToC2={handleCopyC1ToC2}
-          onSelectSplitMode={handleSelectSplitMode}
-          onToggleAutoSplit={handleToggleAutoSplit}
-          onToggleFreeMergeMode={handleToggleFreeMergeMode}
-          onSetEdgeMode={handleSetEdgeMode}
-          onApplyFreeMergePreset={handleApplyFreeMergePreset}
-          onSwapSeams={handleSwapSeams}
+          paramsContent={
+            <ParamsTab
+              config={config}
+              workshopSettings={workshopSettings}
+              selection={selection}
+              onSelectTarget={handleSelectTarget}
+              onOpenInspector={handleOpenInspector}
+              onChange={handlePatchConfig}
+              onDimensionChange={handleDimensionChange}
+              onSheetMaterialChange={handleSheetMaterialChange}
+              onCopyC1ToC2={handleCopyC1ToC2}
+              onSelectSplitMode={handleSelectSplitMode}
+              onToggleAutoSplit={handleToggleAutoSplit}
+              onToggleFreeMergeMode={handleToggleFreeMergeMode}
+              onSetEdgeMode={handleSetEdgeMode}
+              onApplyFreeMergePreset={handleApplyFreeMergePreset}
+              onSwapSeams={handleSwapSeams}
+            />
+          }
+          lsxContent={
+            <LsxTab
+              config={config}
+              workshopSettings={workshopSettings}
+              onApplyConfig={handlePatchConfig}
+            />
+          }
+          blankContent={
+            <BlankAnalysisTab
+              config={config}
+              workshopSettings={workshopSettings}
+              flatPatternDoc={flatPatternDoc}
+              selectedPartCode={selectedPartCode}
+              onSelectPart={(partCode) =>
+                handleSelectTarget(partCode ? { kind: 'piece', partCode } : null)
+              }
+              onOpenPartInspector={(partCode) =>
+                handleOpenInspector({ kind: 'piece', partCode })
+              }
+            />
+          }
         />
       )}
 
@@ -542,10 +596,9 @@ export function App() {
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <TopToolbar
           config={config}
-          viewportMode={viewportMode}
+          viewportMode={effectiveViewportMode}
           onChangeViewportMode={setViewportMode}
-          flatPatternSupported={true}
-          unfoldSupported={true}
+          capabilities={activeProduct.capabilities}
           onChange={handlePatchConfig}
           onSwapSeams={handleSwapSeams}
           onOpenWorkshopSettings={() => setSettingsModalOpen(true)}
@@ -609,14 +662,19 @@ export function App() {
           >
             <DuctScene
               config={config}
-              ribPitchMm={workshopSettings.ribPitchMm}
               cameraCommand={cameraCommand}
-              selection={selection}
               active={show3D}
               onSelectTarget={handleSelectTarget}
-              onOpenInspector={handleOpenInspector}
               onOpenContextMenu={handleOpenContextMenu}
-            />
+            >
+              <DuctAssembly
+                config={config}
+                ribPitchMm={workshopSettings.ribPitchMm}
+                selection={selection}
+                onSelectTarget={handleSelectTarget}
+                onOpenInspector={handleOpenInspector}
+              />
+            </DuctScene>
             {show3D && (
               <ViewportOverlays
                 config={config}
@@ -643,6 +701,7 @@ export function App() {
                 onOpenInspector={handleOpenInspector}
                 onOpenContextMenu={handleOpenContextMenu}
                 focusPartRequest={focusPartRequest}
+                dxfSupported={activeProduct.capabilities.dxfSupported}
                 compact={isSplit}
                 topLeftOverlay={
                   !show3D && (!sidebarOpen || (selection && pure2dPill)) ? (
